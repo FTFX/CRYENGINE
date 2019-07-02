@@ -78,8 +78,8 @@ public:
 	CTexture* m_pTexLinearDepthScaled[3] = { nullptr, nullptr, nullptr };                   // Min, Max, Avg, med
 	CTexture* m_pTexClipVolumes = nullptr;                                                  // CClipVolumeStage, CTiledShadingStage, CHeightMapAOStage
 	CTexture* m_pTexAOColorBleed = nullptr;                                                 // CScreenSpaceObscuranceStage, CTiledShadingStage
-	CTexture* m_pTexSceneDiffuseTmp = nullptr;
-	CTexture* m_pTexSceneSpecularTmp = nullptr;
+	CTexture* m_pTexSceneDiffuseTmp = nullptr;                                              // CRainStage, CSnowStage
+	CTexture* m_pTexSceneSpecularTmp[2] = { nullptr, nullptr };                             // CRainStage, CSnowStage, CScreenSpaceObscuranceStage
 
 	CTexture* m_pTexDisplayTargetScaled[3] = { nullptr, nullptr, nullptr };                 // low-resolution/blurred version. 2x/4x/8x/16x smaller than screen
 	CTexture* m_pTexDisplayTargetScaledTemp[2] = { nullptr, nullptr };                      // low-resolution/blurred version. 2x/4x/8x/16x smaller than screen, temp textures (used for blurring/ping-pong)
@@ -106,14 +106,11 @@ public:
 
 	CTexture* m_pTexHDRFinalBloom = nullptr;                                                // CRainStage, CToneMappingStage, CBloomStage
 
-	CTexture* m_pTexModelHudBuffer = nullptr;                                               // CV_r_UsePersistentRTForModelHUD, used by Menu3DModelRenderer to postprocess render models
 	CTexture* m_pTexSceneCoC[MIN_DOF_COC_K];                                                // CDepthOfFieldStage
 	CTexture* m_pTexSceneCoCTemp = nullptr;                                                 // CDepthOfFieldStage
 	CTexture* m_pTexWaterVolumeRefl[2] = { nullptr, nullptr };                              // CWaterStage, water volume reflections buffer
 	CTexture* m_pTexRainSSOcclusion[2] = { nullptr, nullptr };                              // CRainStage, screen-space rain occlusion accumulation
 
-	CTexture* m_pTexCached3DHud = nullptr;                                                  // CHud3DPass, 3d hud cached overframes
-	CTexture* m_pTexCached3DHudScaled = nullptr;                                            // CHud3DPass, downsampled 3d hud cached overframes
 	CTexture* m_pTexRainOcclusion = nullptr;                                                // CRainStage, CSnowStage, top-down rain occlusion
 	CTexture* m_pTexLinearDepthFixup = nullptr;
 	ResourceViewHandle m_pTexLinearDepthFixupUAV;
