@@ -27,12 +27,12 @@ namespace TerrainSectorRenderTempData {
 void GetMemoryUsage(ICrySizer* pSizer);
 }
 
-void CTerrain::AddVisSector(CTerrainNode* pNode, uint32 passCullMask)
+void CTerrain::AddVisSector(CTerrainNode* pNode, FrustumMaskType passCullMask)
 {
 	m_lstVisSectors.Add(STerrainVisItem(pNode, passCullMask));
 }
 
-void CTerrain::CheckVis(const SRenderingPassInfo& passInfo, uint32 passCullMask)
+void CTerrain::CheckVis(const SRenderingPassInfo& passInfo, FrustumMaskType passCullMask)
 {
 	FUNCTION_PROFILER_3DENGINE;
 
@@ -490,7 +490,7 @@ void CTerrain::GetMemoryUsage(class ICrySizer* pSizer) const
 		SIZER_COMPONENT_NAME(pSizer, "StaticIndices");
 		for (int i = 0; i < SRangeInfo::e_max_surface_types; ++i)
 			for (int j = 0; j < 4; ++j)
-				pSizer->AddObject(CTerrainNode::m_arrIndices[i][j]);
+				pSizer->AddObject(CTerrainNode::s_arrIndices[i][j]);
 	}
 }
 

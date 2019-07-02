@@ -28,7 +28,7 @@
 #include "Brush.h"
 #include "ClipVolumeManager.h"
 
-void CObjManager::RenderDecalAndRoad(IRenderNode* pEnt, PodArray<SRenderLight*>* pAffectingLights,
+void CObjManager::RenderDecalAndRoad(IRenderNode* pEnt,
                                      const Vec3& vAmbColor, const AABB& objBox,
                                      float fEntDistance,
                                      bool nCheckOcclusion,
@@ -48,8 +48,6 @@ void CObjManager::RenderDecalAndRoad(IRenderNode* pEnt, PodArray<SRenderLight*>*
 			return; // skip invalid objects - usually only objects with invalid very big scale will reach this point
 		}
 	}
-	else
-		pAffectingLights = NULL;
 
 	// allocate RNTmpData for potentially visible objects
 	SRenderNodeTempData* pTempData = Get3DEngine()->CheckAndCreateRenderNodeTempData(pEnt, passInfo);
@@ -80,10 +78,10 @@ void CObjManager::RenderDecalAndRoad(IRenderNode* pEnt, PodArray<SRenderLight*>*
 	DrawParams.nAfterWater = IsAfterWater(objBox.GetCenter(), vCamPos, passInfo) ? 1 : 0;
 
 	// draw bbox
+#if !defined(_RELEASE)
 	if (GetCVars()->e_BBoxes)
-	{
 		RenderObjectDebugInfo(pEnt, fEntDistance, passInfo);
-	}
+#endif
 
 	DrawParams.dwFObjFlags |= FOB_TRANS_MASK;
 
@@ -94,12 +92,13 @@ void CObjManager::RenderDecalAndRoad(IRenderNode* pEnt, PodArray<SRenderLight*>*
 	pEnt->Render(DrawParams, passInfo);
 }
 
-void CObjManager::RenderVegetation(CVegetation* pEnt, PodArray<SRenderLight*>* pAffectingLights,
+void CObjManager::RenderVegetation(CVegetation* pEnt,
                                    const AABB& objBox,
                                    float fEntDistance,
-                                   SSectorTextureSet* pTerrainTexInfo, bool nCheckOcclusion,
+                                   SSectorTextureSet* pTerrainTexInfo,
+                                   bool nCheckOcclusion,
                                    const SRenderingPassInfo& passInfo,
-                                   uint32 passCullMask)
+                                   FrustumMaskType passCullMask)
 {
 	FUNCTION_PROFILER_3DENGINE;
 
@@ -111,7 +110,7 @@ void CObjManager::RenderVegetation(CVegetation* pEnt, PodArray<SRenderLight*>* p
 	if (!pTempData)
 		return;
 
-	if (passCullMask & kPassCullMainMask && nCheckOcclusion)
+	if ((passCullMask & kPassCullMainMask) != 0 && nCheckOcclusion)
 	{
 		if (GetObjManager()->IsBoxOccluded(objBox, fEntDistance * passInfo.GetInverseZoomFactor(), &pTempData->userData.m_OcclState, pEnt->GetEntityVisArea() != nullptr, eoot_OBJECT, passInfo))
 		{
@@ -121,7 +120,7 @@ void CObjManager::RenderVegetation(CVegetation* pEnt, PodArray<SRenderLight*>* p
 
 	const CLodValue lodValue = pEnt->ComputeLod(pTempData->userData.nWantedLod, passInfo);
 
-	if (passCullMask & kPassCullMainMask)
+	if ((passCullMask & kPassCullMainMask) != 0)
 	{
 		if (GetCVars()->e_LodTransitionTime && passInfo.IsGeneralPass())
 		{
@@ -139,18 +138,19 @@ void CObjManager::RenderVegetation(CVegetation* pEnt, PodArray<SRenderLight*>* p
 		}
 	}
 
-	if (passCullMask & ~kPassCullMainMask)
+	if ((passCullMask & ~kPassCullMainMask) != 0)
 	{
 		COctreeNode::RenderObjectIntoShadowViews(passInfo, fEntDistance, pEnt, objBox, passCullMask);
 	}
 }
 
-void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<SRenderLight*>* pAffectingLights,
-                               const Vec3& vAmbColor, const AABB& objBox,
+void CObjManager::RenderObject(IRenderNode* pEnt,
+                               const Vec3& vAmbColor,
+                               const AABB& objBox,
                                float fEntDistance,
                                EERType eERType,
                                const SRenderingPassInfo& passInfo,
-                               uint32 passCullMask)
+                               FrustumMaskType passCullMask)
 {
 	FUNCTION_PROFILER_3DENGINE;
 
@@ -215,8 +215,6 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<SRenderLight*>* pAffe
 			return; // skip invalid objects - usually only objects with invalid very big scale will reach this point
 		}
 	}
-	else
-		pAffectingLights = NULL;
 #endif
 
 	if (pEnt->GetRndFlags() & (ERF_COLLISION_PROXY | ERF_RAYCAST_PROXY))
@@ -270,12 +268,12 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<SRenderLight*>* pAffe
 	DrawParams.nEditorSelectionID = pEnt->m_nEditorSelectionID;
 	//DrawParams.pInstance = pEnt;
 
-	if (passCullMask & kPassCullMainMask && eERType != eERType_Light && (pEnt->m_nInternalFlags & IRenderNode::REQUIRES_NEAREST_CUBEMAP))
+	if ((passCullMask & kPassCullMainMask) != 0 && eERType != eERType_Light && (pEnt->m_nInternalFlags & IRenderNode::REQUIRES_NEAREST_CUBEMAP))
 	{
 		Vec4 envProbMults = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
 		uint16 nCubemapTexId = 0;
 		if (!(nCubemapTexId = CheckCachedNearestCubeProbe(pEnt, &envProbMults)) || !pCVars->e_CacheNearestCubePicking)
-			nCubemapTexId = GetNearestCubeProbe(pAffectingLights, pVisArea, objBox, true, &envProbMults);
+			nCubemapTexId = GetNearestCubeProbe(pVisArea, objBox, true, &envProbMults);
 
 		pTempData->userData.nCubeMapId = nCubemapTexId;
 		pTempData->userData.vEnvironmentProbeMults = envProbMults;
@@ -290,10 +288,8 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<SRenderLight*>* pAffe
 
 	// draw bbox
 #if !defined(_RELEASE)
-	if (pCVars->e_BBoxes)// && eERType != eERType_Light)
-	{
+	if (pCVars->e_BBoxes)
 		RenderObjectDebugInfo(pEnt, fEntDistance, passInfo);
-	}
 #endif
 
 	DrawParams.dwFObjFlags |= FOB_TRANS_MASK;
@@ -331,7 +327,7 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<SRenderLight*>* pAffe
 	DrawParams.nMaterialLayers = pEnt->GetMaterialLayers();
 	DrawParams.lodValue = pEnt->ComputeLod(pTempData->userData.nWantedLod, passInfo);
 
-	if (passCullMask & kPassCullMainMask)
+	if ((passCullMask & kPassCullMainMask) != 0)
 	{
 		if (GetCVars()->e_LodTransitionTime && passInfo.IsGeneralPass() && pEnt->GetRenderNodeType() == eERType_MovableBrush)
 		{
@@ -352,7 +348,7 @@ void CObjManager::RenderObject(IRenderNode* pEnt, PodArray<SRenderLight*>* pAffe
 		}
 	}
 
-	if (passCullMask & ~kPassCullMainMask)
+	if ((passCullMask & ~kPassCullMainMask) != 0)
 	{
 		COctreeNode::RenderObjectIntoShadowViews(passInfo, fEntDistance, pEnt, objBox, passCullMask);
 	}
@@ -382,9 +378,23 @@ void CObjManager::RemoveFromRenderAllObjectDebugInfo(IRenderNode* pEnt)
 
 void CObjManager::RenderObjectDebugInfo_Impl(IRenderNode* pEnt, float fEntDistance)
 {
+#if !defined(_RELEASE)
 	if (GetCVars()->e_BBoxes > 0)
 	{
 		ColorF color(1, 1, 1, 1);
+
+		switch (pEnt->GetRenderNodeType())
+		{
+		case eERType_ParticleEmitter: color = ColorF(1.000f, 0.000f, 0.000f, 1); break;
+		case eERType_Vegetation:      color = ColorF(0.000f, 1.000f, 0.000f, 1); break;
+		case eERType_WaterVolume:     color = ColorF(0.000f, 0.000f, 1.000f, 1); break;
+		case eERType_WaterWave:       color = ColorF(0.000f, 0.000f, 1.000f, 1); break;
+
+		case eERType_Light:           color = ColorF(0.707f, 0.707f, 0.000f, 1); break;
+		case eERType_Character:       color = ColorF(0.707f, 0.000f, 0.707f, 1); break;
+		case eERType_Brush:           color = ColorF(0.000f, 0.707f, 0.707f, 1); break;
+		case eERType_MovableBrush:    color = ColorF(0.000f, 0.707f, 0.707f, 1); break;
+		}
 
 		if (GetCVars()->e_BBoxes == 2 && pEnt->GetRndFlags() & ERF_SELECTED)
 		{
@@ -410,6 +420,7 @@ void CObjManager::RenderObjectDebugInfo_Impl(IRenderNode* pEnt, float fEntDistan
 
 		pRenAux->DrawAABB(rAABB, false, color, eBBD_Faceted);
 	}
+#endif
 }
 
 bool CObjManager::RayRenderMeshIntersection(IRenderMesh* pRenderMesh, const Vec3& vInPos, const Vec3& vInDir, Vec3& vOutPos, Vec3& vOutNormal, bool bFastTest, IMaterial* pMat)

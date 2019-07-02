@@ -22,7 +22,6 @@
 #include "ObjMan.h"
 #include "ParticleMemory.h"
 #include "ParticleSystem/ParticleSystem.h"
-#include "ObjManCullQueue.h"
 #include "MergedMeshRenderNode.h"
 #include "GeomCacheManager.h"
 #include "DeformableNode.h"
@@ -1526,14 +1525,6 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 		GetObjManager()->m_CullThread.SetActive(true);
 
 	////////////////////////////////////////////////////////////////////////////////////////
-	// Sync asynchronous cull queue processing if enabled
-	////////////////////////////////////////////////////////////////////////////////////////
-#ifdef USE_CULL_QUEUE
-	if (GetCVars()->e_CoverageBuffer)
-		GetObjManager()->CullQueue().Wait();
-#endif
-
-	////////////////////////////////////////////////////////////////////////////////////////
 	// Draw potential occluders into z-buffer
 	////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1613,7 +1604,7 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	////////////////////////////////////////////////////////////////////////////////////////
 	std::vector<SRenderingPassInfo> shadowPassInfo;                                 // Shadow passes used in scene
 	std::vector<std::pair<ShadowMapFrustum*, const CLightEntity*>> shadowFrustums;  // Shadow frustums and lights used in scene
-	uint32 passCullMask = kPassCullMainMask;                                        // initialize main view bit as visible
+	auto passCullMask = kPassCullMainMask;                                          // initialize main view bit as visible
 
 	if (passInfo.RenderShadows() && !passInfo.IsRecursivePass())
 	{
@@ -1625,7 +1616,7 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 
 		// initialize shadow view bits
 		for (uint32 p = 0; p < shadowPassInfo.size(); p++)
-			passCullMask |= BIT(p + 1);
+			passCullMask |= FMBIT(p + 1);
 
 		// store ptr to collected shadow passes into main view pass
 		const_cast<SRenderingPassInfo&>(passInfo).SetShadowPasses(&shadowPassInfo);
@@ -1636,11 +1627,13 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	else
 	{
 		CRY_PROFILE_SECTION(PROFILE_3DENGINE, "Traverse Outdoor Lights");
-		uint32 outdoorCullMask = IsOutdoorVisible() ? passCullMask : (passCullMask & ~kPassCullMainMask);
 
 		// render point lights
 		CLightEntity::SetShadowFrustumsCollector(nullptr);
-		m_pObjectsTree->Render_LightSources(false, outdoorCullMask, passInfo);
+
+		auto outdoorCullMask = IsOutdoorVisible() ? passCullMask : (passCullMask & ~kPassCullMainMask);
+		if (outdoorCullMask != 0)
+			m_pObjectsTree->Render_Light_Nodes(false, OCTREENODE_RENDER_FLAG_LIGHTS, GetSkyColor(), outdoorCullMask, passInfo);
 	}
 
 	// draw objects inside visible vis areas
@@ -1670,7 +1663,7 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	if (m_pTerrain)
 		m_pTerrain->ClearVisSectors();
 
-	if (passCullMask || GetRenderer()->IsPost3DRendererEnabled())
+	if ((passCullMask != 0) || GetRenderer()->IsPost3DRendererEnabled())
 	{
 		if (m_pVisAreaManager && m_pVisAreaManager->m_lstOutdoorPortalCameras.Count() &&
 		    (m_pVisAreaManager->m_pCurArea || m_pVisAreaManager->m_pCurPortal))
@@ -1695,7 +1688,8 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 		passInfo.GetRendItemSorter().IncreaseOctreeCounter();
 		{
 			CRY_PROFILE_SECTION(PROFILE_3DENGINE, "Traverse Outdoor Octree");
-			if (uint32 outdoorCullMask = IsOutdoorVisible() ? passCullMask : (passCullMask & ~kPassCullMainMask))
+			auto outdoorCullMask = IsOutdoorVisible() ? passCullMask : (passCullMask & ~kPassCullMainMask);
+			if (outdoorCullMask != 0)
 				m_pObjectsTree->Render_Object_Nodes(false, OCTREENODE_RENDER_FLAG_OBJECTS, GetSkyColor(), outdoorCullMask, passInfo);
 		}
 
@@ -1750,11 +1744,11 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 			{
 				if (pObj->GetRenderNodeType() == eERType_Brush || pObj->GetRenderNodeType() == eERType_MovableBrush)
 				{
-					GetObjManager()->RenderBrush((CBrush*)pObj, NULL, NULL, objBox, fEntDistance, false, passInfo, passCullMask & kPassCullMainMask);
+					GetObjManager()->RenderBrush((CBrush*)pObj, NULL, objBox, fEntDistance, false, passInfo, passCullMask & kPassCullMainMask);
 				}
 				else
 				{
-					GetObjManager()->RenderObject(pObj, NULL, GetSkyColor(), objBox, fEntDistance, pObj->GetRenderNodeType(), passInfo, passCullMask & kPassCullMainMask);
+					GetObjManager()->RenderObject(pObj, GetSkyColor(), objBox, fEntDistance, pObj->GetRenderNodeType(), passInfo, passCullMask & kPassCullMainMask);
 				}
 			}
 		}
@@ -1790,7 +1784,7 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	// we wait for all render jobs to finish here
 	if (passInfo.IsGeneralPass() && IsStatObjBufferRenderTasksAllowed())
 	{
-		m_pObjManager->RenderNonJobObjects(passInfo);
+		m_pObjManager->RenderNonJobObjects(passInfo, false);
 	}
 
 	// render terrain ground in case of non job mode
@@ -1807,18 +1801,20 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 	if (m_pPartManager)
 		m_pPartManager->FinishParticleRenderTasks(passInfo);
 
-	// all shadow casters are submitted, switch render views into eUsageModeWritingDone mode
-	for (const auto& pair : shadowFrustums)
-	{
-		auto& shadowFrustum = pair.first;
-		CRY_ASSERT(shadowFrustum->pOnePassShadowView);
-		shadowFrustum->pOnePassShadowView->SwitchUsageMode(IRenderView::eUsageModeWritingDone);
-	}
-
 	// start render jobs for shadow map
 	if (!passInfo.IsShadowPass() && passInfo.RenderShadows() && !passInfo.IsRecursivePass())
 	{
-		GetRenderer()->EF_InvokeShadowMapRenderJobs(passInfo, 0);
+		// All shadow casters are submitted, switch render views into eUsageModeWritingDone mode
+		// only after finalizing all preparations (immutable from the MT PoV)
+		GetRenderer()->EF_PrepareShadowTasksForRenderView(passInfo);
+
+		if (auto mode = GetCVars()->e_ShadowsFrustums)
+		{
+			const int numFrames = mode == 1 ? 1000 : 1;
+			for (auto pFr : shadowFrustums)
+				if (pFr.first->GetCasterNum())
+					pFr.first->DrawFrustum(GetRenderer(), numFrames);
+		}
 	}
 
 	// add sprites render item
@@ -1830,13 +1826,6 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 
 	if (auto* pGame = gEnv->pGameFramework->GetIGame())
 		pGame->OnRenderScene(passInfo);
-
-	////////////////////////////////////////////////////////////////////////////////////////
-	// Start asynchronous cull queue processing if enabled
-	////////////////////////////////////////////////////////////////////////////////////////
-
-	//Tell the c-buffer that the item queue is ready. The render thread supplies the depth buffer to test against and this is prepared asynchronously
-	GetObjManager()->CullQueue().FinishedFillingTestItemQueue();
 
 	////////////////////////////////////////////////////////////////////////////////////////
 	// Finalize frame
@@ -1889,19 +1878,6 @@ void C3DEngine::RenderScene(const int nRenderFlags, const SRenderingPassInfo& pa
 
 	if (passInfo.IsGeneralPass() && IsStatObjBufferRenderTasksAllowed())
 		m_pObjManager->EndOcclusionCulling();
-
-	// release shadow views (from now only renderer owns it)
-	for (const auto& pair : shadowFrustums)
-	{
-		auto& shadowFrustum = pair.first;
-		CRY_ASSERT(shadowFrustum->pOnePassShadowView);
-		shadowFrustum->pOnePassShadowView.reset();
-	}
-}
-
-void C3DEngine::ResetCoverageBufferSignalVariables()
-{
-	GetObjManager()->CullQueue().ResetSignalVariables();
 }
 
 void C3DEngine::ProcessOcean(const SRenderingPassInfo& passInfo)
@@ -2630,7 +2606,7 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 		const bool bFallback = nMainFrameId - nFallbackFrameId < 50;
 
 		cry_sprintf(szMeshPoolUse,
-		            "Mesh Pool: Used:%.2fKB(%d%%%%) Peak %.fKB (%.fKB) PoolSize:%" PRISIZE_T "KB Flushes %" PRISIZE_T " Fallbacks %.3fKB%s",
+		            "Mesh Pool: Used:%.2fKB(%d%%%%) Peak %.fKB (%.fKB) PoolSize:%" PRISIZE_T "KB Flushes %" PRISIZE_T " Fallbacks %.3fKB %s",
 		            (float)stats.nPoolInUse / 1024,
 		            iPercentage,
 		            (float)stats.nPoolInUsePeak / 1024,
@@ -2840,7 +2816,7 @@ void C3DEngine::DisplayInfo(float& fTextPosX, float& fTextPosY, float& fTextStep
 			bool bTooManyLights = nUsedShadowMaskChannels > nAvailableShadowMaskChannels ? true : false;
 
 			DrawTextRightAligned(fTextPosX, fTextPosY += fTextStepY, DISPLAY_INFO_SCALE, (nShadowFrustums || nShadowAllocs) ? Col_Yellow : Col_White, "%d Shadow Mask Channels, %3d Frustums, %3d Frustums This Frame, %d One-Pass Frustums",
-			                     nUsedShadowMaskChannels, nShadowFrustums, nShadowAllocs, m_onePassShadowFrustumsCount);
+			                     nUsedShadowMaskChannels, nShadowFrustums, nShadowAllocs, m_onePassShadowTraversalCount);
 
 			if (bThrash)
 			{
@@ -3710,7 +3686,7 @@ void C3DEngine::FillDebugFPSInfo(SDebugFPSInfo& info)
 
 void C3DEngine::PrepareShadowPasses(const SRenderingPassInfo& passInfo, uint32& nTimeSlicedShadowsUpdatedThisFrame, std::vector<std::pair<ShadowMapFrustum*, const CLightEntity*>>& shadowFrustums, std::vector<SRenderingPassInfo>& shadowPassInfo)
 {
-	uint32 passCullMask = kPassCullMainMask; // initialize main view bit as visible
+	auto passCullMask = kPassCullMainMask; // initialize main view bit as visible
 
 	// enable collection of all accessed frustums
 	CLightEntity::SetShadowFrustumsCollector(&shadowFrustums);
@@ -3721,8 +3697,9 @@ void C3DEngine::PrepareShadowPasses(const SRenderingPassInfo& passInfo, uint32& 
 	// render outdoor point lights and collect dynamic point light frustums
 	if (IsObjectsTreeValid())
 	{
-		if (uint32 outdoorCullMask = IsOutdoorVisible() ? passCullMask : (passCullMask & ~kPassCullMainMask))
-			m_pObjectsTree->Render_LightSources(false, outdoorCullMask, passInfo);
+		auto outdoorCullMask = IsOutdoorVisible() ? passCullMask : (passCullMask & ~kPassCullMainMask);
+		if (outdoorCullMask != 0)
+			m_pObjectsTree->Render_Light_Nodes(false, OCTREENODE_RENDER_FLAG_LIGHTS, GetSkyColor(), outdoorCullMask, passInfo);
 	}
 
 	// render indoor point lights and collect dynamic point light frustums
@@ -3733,8 +3710,20 @@ void C3DEngine::PrepareShadowPasses(const SRenderingPassInfo& passInfo, uint32& 
 		if (pArea->IsObjectsTreeValid())
 		{
 			for (int c = 0; c < pArea->m_lstCurCamerasLen; ++c)
-				pArea->GetObjectsTree()->Render_LightSources(false, passCullMask, SRenderingPassInfo::CreateTempRenderingInfo(CVisArea::s_tmpCameras[pArea->m_lstCurCamerasIdx + c], passInfo));
+				pArea->GetObjectsTree()->Render_Light_Nodes(false, OCTREENODE_RENDER_FLAG_LIGHTS, GetSkyColor(), passCullMask, SRenderingPassInfo::CreateTempRenderingInfo(CVisArea::s_tmpCameras[pArea->m_lstCurCamerasIdx + c], passInfo));
 		}
+	}
+
+	if (passInfo.IsGeneralPass() && IsStatObjBufferRenderTasksAllowed())
+	{
+		// Process all light-sources
+		m_pObjManager->m_CullThread.SetActive(false);
+		m_pObjManager->RenderNonJobObjects(passInfo, true);
+		m_pObjManager->EndOcclusionCulling();
+
+		// begin again for all following nodes
+		m_pObjManager->m_CullThread.SetActive(true);
+		m_pObjManager->BeginOcclusionCulling(passInfo);
 	}
 
 	// disable collection of frustums
@@ -3743,65 +3732,161 @@ void C3DEngine::PrepareShadowPasses(const SRenderingPassInfo& passInfo, uint32& 
 	// Prepare shadowpools
 	GetRenderer()->PrepareShadowPool(passInfo.GetRenderView());
 
-	// Limit frustums to kMaxShadowPassesNum
-	if (shadowFrustums.size() > kMaxShadowPassesNum)
-		shadowFrustums.resize(kMaxShadowPassesNum);
-	m_onePassShadowFrustumsCount = shadowFrustums.size();
-
+	// Erase all frusta which are skipped this frame before clamping the number of utilized shadow-frusta
+	// Do this without worrying about iterator-invalidation in the vector
+	IRenderView* pRenderView = reinterpret_cast<IRenderView*>(passInfo.GetRenderView());
+	const auto frameID = static_cast<uint32>(passInfo.GetFrameID());
 	shadowPassInfo.reserve(kMaxShadowPassesNum);
-	CRenderView* pRenderView = passInfo.GetRenderView();
 	for (const auto& pair : shadowFrustums)
 	{
-		auto* pFr = pair.first;
+		auto* pFr   = pair.first;
 		auto* light = pair.second;
 
-		assert(!pFr->pOnePassShadowView);
+		CRY_ASSERT(!pFr->bRestrictToRT);
+		IRenderViewPtr pShadowsView = GetRenderer()->GetNextAvailableShadowsView(pRenderView, pFr);
 
 		// Prepare time-sliced shadow frustum updates
-		GetRenderer()->PrepareShadowFrustumForShadowPool((IRenderView*)pRenderView, pFr,
-			static_cast<uint32>(passInfo.GetFrameID()),
-			light->GetLightProperties(),
-			&nTimeSlicedShadowsUpdatedThisFrame);
-
-		IRenderViewPtr pShadowsView = GetRenderer()->GetNextAvailableShadowsView((IRenderView*)pRenderView, pFr);
-		for (int cubeSide = 0; cubeSide < pFr->GetNumSides() && shadowPassInfo.size() < kMaxShadowPassesNum; ++cubeSide)
+		// Skip entirely cached frusta-sets (e.g. all N sub-frusta of a shadow caster are cached)
+		auto updateRequests = GetRenderer()->PrepareShadowFrustumForShadowPool(pRenderView, pFr, light->GetLightProperties(), frameID, &nTimeSlicedShadowsUpdatedThisFrame);
+		if (updateRequests != 0)
 		{
-			if (pFr->ShouldCacheSideHint(cubeSide))
+			for (int cubeSide = 0, cubeSides = pFr->GetNumSides(); cubeSide < cubeSides; ++cubeSide)
 			{
-				pFr->MarkShadowGenMaskForSide(cubeSide);
-				continue;
-			}
+				// Register all frusta-sides which are not cached frusta for rendering this frame
+				if (updateRequests & BIT(cubeSide))
+				{
+					// create a matching rendering pass info for shadows
+					auto pass = SRenderingPassInfo::CreateShadowPassRenderingInfo(
+						passInfo.GetGraphicsPipelineKey(),
+						pShadowsView,
+						pFr->GetCamera(cubeSide),
+						pFr->m_Flags,
+						pFr->nShadowMapLod,
+						pFr->nShadowCacheLod,
+						pFr->IsCached(),
+						pFr->bIsMGPUCopy,
+						cubeSide,
+						SRenderingPassInfo::DEFAULT_SHADOWS_FLAGS);
 
-			// create a matching rendering pass info for shadows
-			auto pass = SRenderingPassInfo::CreateShadowPassRenderingInfo(
-				passInfo.GetGraphicsPipelineKey(),
-				pShadowsView,
-				pFr->GetCamera(cubeSide),
-				pFr->m_Flags,
-				pFr->nShadowMapLod,
-				pFr->nShadowCacheLod,
-				pFr->IsCached(),
-				pFr->bIsMGPUCopy,
-				cubeSide,
-				SRenderingPassInfo::DEFAULT_SHADOWS_FLAGS);
-			shadowPassInfo.push_back(std::move(pass));
+					shadowPassInfo.push_back(std::move(pass));
+				}
+			}
 		}
+
+		// Mark cached sides as sampleable sides
+		auto deferredRequests = pFr->UpdateRequests() & ~updateRequests;
+		auto insertedRequests = ~pFr->UpdateRequests() & updateRequests;
+
+		pFr->MarkSideAsUnrendered(insertedRequests);                   // Old data is destroyed (block-reallocation)
+		pFr->RequestSamples(deferredRequests | pFr->SampleRequests()); // Toggle sampling on frozen shadow-maps
+		pFr->RequestUpdates(updateRequests);                           // Set the new update mask for shadow maps
 
 		pShadowsView->SetShadowFrustumOwner(pFr);
 		pShadowsView->SwitchUsageMode(IRenderView::eUsageModeWriting);
+
 		pFr->pOnePassShadowView = std::move(pShadowsView);
 	}
+
+	auto sortFrusta = [=](const SRenderingPassInfo& a, const SRenderingPassInfo& b) -> bool
+	{
+		const auto* frustumA = a.GetIRenderView()->GetShadowFrustumOwner();
+		const auto* frustumB = b.GetIRenderView()->GetShadowFrustumOwner();
+		const int frustumSideA = a.ShadowFrustumSide();
+		const int frustumSideB = b.ShadowFrustumSide();
+
+		// Frusta without update-requests trailing everything else (frusta who's update has not yet come have no update-request)
+		// Pool-using frusta with update-rates at the end
+		// Never rendered frusta before those which could be cached because of existing contents
+		// Sort frusta by number of missed frames (simplified version of: "0xFFFFFFFF - ((current - previous) - updateRate)")
+		uint64 rankA =
+			(uint64(    !frustumA->ShouldUpdate     (frustumSideA)) << (sizeof(uint64) * CHAR_BIT -  1)) +
+			(uint64(     frustumA->bUseShadowsPool                ) << (sizeof(uint64) * CHAR_BIT -  2)) +
+			(uint64(0 != frustumA->nSideDrawnOnFrame[frustumSideA]) << (sizeof(uint64) * CHAR_BIT -  3)) +
+			(uint64(0 != frustumA->nShadowPoolUpdateRate          ) << (sizeof(uint64) * CHAR_BIT -  4)) +
+			(uint64(     frustumA->nShadowPoolUpdateRate           +
+			             frustumA->nSideDrawnOnFrame[frustumSideA]) << (sizeof(uint64) * CHAR_BIT - 35));
+		uint64 rankB =
+			(uint64(    !frustumB->ShouldUpdate     (frustumSideB)) << (sizeof(uint64) * CHAR_BIT -  1)) +
+			(uint64(     frustumB->bUseShadowsPool                ) << (sizeof(uint64) * CHAR_BIT -  2)) +
+			(uint64(0 != frustumB->nSideDrawnOnFrame[frustumSideB]) << (sizeof(uint64) * CHAR_BIT -  3)) +
+			(uint64(0 != frustumB->nShadowPoolUpdateRate          ) << (sizeof(uint64) * CHAR_BIT -  4)) +
+			(uint64(     frustumB->nShadowPoolUpdateRate           +
+			             frustumB->nSideDrawnOnFrame[frustumSideB]) << (sizeof(uint64) * CHAR_BIT - 35));
+
+		return rankA < rankB;
+	};
+
+	// Sort by importance for overflow truncation
+	std::sort(shadowPassInfo.begin(), shadowPassInfo.end(), sortFrusta);
+
+	// Limit one-pass frusta to kMaxShadowPassesNum
+	size_t numPassInfos = shadowPassInfo.size();
+	if (numPassInfos > kMaxShadowPassesNum)
+	{
+		f32 fColor[4] = { 1, 0, 0, 1 };
+		int convertedToCached = 0;
+
+		// Mark all pruned shadow frusta as cached, if possible (need to have been rendered previously)
+		for (size_t i = kMaxShadowPassesNum, l = shadowPassInfo.size(); i < l; ++i)
+		{
+			auto& passInfo = shadowPassInfo[i];
+			auto* frustum = passInfo.GetIRenderView()->GetShadowFrustumOwner();
+			const int frustumSide = passInfo.ShadowFrustumSide();
+
+			if (frustum->HasVariableUpdateRate() && frustum->HasSamplableContents(frustumSide))
+			{
+				// Mark cached sides as sampleable sides
+				frustum->RequestSample(frustumSide);
+
+				++convertedToCached;
+			}
+
+			frustum->ClearUpdates(BIT(frustumSide));
+		}
+
+		IRenderAuxText::Draw2dLabel(10.0f, 20.0f, 2.0f, fColor, false, "More shadow casters than traversable in one pass! Cutting %d to %d casters.", shadowPassInfo.size(), kMaxShadowPassesNum);
+		IRenderAuxText::Draw2dLabel(10.0f, 38.0f, 2.0f, fColor, false, "Of the %d cut casters %d have been successfully converted to caches, which don't update.", shadowPassInfo.size() - kMaxShadowPassesNum, convertedToCached);
+		IRenderAuxText::Draw2dLabel(10.0f, 56.0f, 2.0f, fColor, false, "Flickering can occur, especially from shadow casters with reduced update rate.");
+
+		static ICVar* pCV_r_ShadowPoolMaxFrames = GetConsole()->GetCVar("r_ShadowPoolMaxFrames");
+		if (pCV_r_ShadowPoolMaxFrames && pCV_r_ShadowPoolMaxFrames->GetIVal() == 0)
+		{
+			IRenderAuxText::Draw2dLabel(10.0f, 92.0f, 2.0f, fColor, false, "All reduced update-rates have been disabled by r_ShadowPoolMaxFrames=0!");
+			IRenderAuxText::Draw2dLabel(10.0f, 110.0f, 2.0f, fColor, false, "Shadows will not stabilize over time. Set the update-rate limit to a positive value to enable progressive rendering of shadows.");
+		}
+
+		numPassInfos = kMaxShadowPassesNum;
+	}
+
+	// Limit one-pass frusta to those which requested an update
+	while (numPassInfos > 0)
+	{
+		auto& passInfo = shadowPassInfo[numPassInfos - 1];
+		auto* frustum = passInfo.GetIRenderView()->GetShadowFrustumOwner();
+		const int frustumSide = passInfo.ShadowFrustumSide();
+
+		if (frustum->ShouldUpdate(frustumSide))
+			break;
+
+		--numPassInfos;
+	}
+
+	shadowPassInfo.resize(numPassInfos);
+	m_onePassShadowTraversalCount = numPassInfos;
 }
 
 void C3DEngine::FinalizePrepareShadowPasses(const SRenderingPassInfo& passInfo, const std::vector<std::pair<ShadowMapFrustum*, const CLightEntity*>>& shadowFrustums, std::vector<SRenderingPassInfo>& shadowPassInfo)
 {
 	CRY_PROFILE_FUNCTION_WAITING(PROFILE_3DENGINE);
 
-	for (const auto& frustumLightPair : shadowFrustums)
+	for (size_t i = 0, l = shadowPassInfo.size(); i < l; ++i)
 	{
-		if (frustumLightPair.first->IsCached())
+		auto& passInfo = shadowPassInfo[i];
+		auto* frustum = passInfo.GetIRenderView()->GetShadowFrustumOwner();
+
+		if (frustum->IsCached())
 		{
-			if (auto& pShadowCacheData = frustumLightPair.first->pShadowCacheData)
+			if (auto& pShadowCacheData = frustum->pShadowCacheData)
 			{
 				pShadowCacheData->mTraverseOctreeJobState.Wait();
 			}
