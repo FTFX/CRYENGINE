@@ -18,7 +18,7 @@
 #include "DragDrop.h"
 #include <EditorFramework/Events.h>
 
-namespace PropertyTree2
+namespace PropertyTree
 {
 
 CFormWidget::SFormRow::SFormRow(const CRowModel* pRowModel)
@@ -91,8 +91,10 @@ CFormWidget::CFormWidget(QPropertyTree* pParentTree, const CRowModel* pRow, int 
 
 CFormWidget::~CFormWidget()
 {
-	//detach widgets from parent relationship here because they are owned by CRowDescriptor
+	// detach widgets from parent relationship here because they are owned by CRowDescriptor
 	ReleaseWidgets();
+	// make sure to recursively set parent property tree to nullptr
+	ReleasePropertyTree();
 }
 
 void CFormWidget::OnSplitterPosChanged()
@@ -155,7 +157,7 @@ void CFormWidget::SetupWidgets()
 
 		SFormRow* pFormRow = nullptr;
 		//If we have a row with this model use it. If not create a new one
-		auto foundRow = std::find_if(m_rows.begin(), m_rows.end(), [pChild](std::unique_ptr<SFormRow>& pFormRow)
+		auto foundRow = std::find_if(m_rows.begin(), m_rows.end(), [&pChild](std::unique_ptr<SFormRow>& pFormRow)
 			{
 				return pFormRow->m_pModel.get() == pChild.get();
 			});
@@ -248,6 +250,22 @@ void CFormWidget::RecursiveInstallEventFilter(QWidget* pWidget)
 	}
 }
 
+void CFormWidget::ReleasePropertyTree()
+{
+	if (!m_pParentTree)
+		return;
+
+	m_pParentTree = nullptr;
+
+	for (std::unique_ptr<SFormRow>& pRow : m_rows)
+	{
+		if (pRow->m_pChildContainer)
+		{
+			pRow->m_pChildContainer->ReleasePropertyTree();
+		}
+	}
+}
+
 void CFormWidget::ReleaseWidgets()
 {
 	//The widgets in the property tree do not follow by the regular Qt model of hierarchy.
@@ -276,6 +294,11 @@ void CFormWidget::ReleaseWidgets()
 				pInlineWidgetBox->ReleaseWidgets(m_pParentTree);
 				pInlineWidgetBox->deleteLater();
 			}
+		}
+
+		if (pRow->m_pChildContainer)
+		{
+			pRow->m_pChildContainer->ReleaseWidgets();
 		}
 
 		pRow->m_pWidget = nullptr;
@@ -756,7 +779,7 @@ void CFormWidget::mouseMoveEvent(QMouseEvent* pEvent)
 				int rowIndex = RowIndexAtPosition(m_mouseDownPos);
 				if (rowIndex != -1)
 				{
-					PropertyTree2::CFormWidget::SFormRow& pDraggedRow = *m_rows[rowIndex];
+					PropertyTree::CFormWidget::SFormRow& pDraggedRow = *m_rows[rowIndex];
 
 					CDragDropData* pDragData = new CDragDropData();
 					pDragData->SetCustomData("PropertyRow", pDraggedRow.m_pModel);
@@ -1329,7 +1352,7 @@ int CFormWidget::GetSplitterPosition() const
 	return mapFrom(m_pParentTree, QPoint(splitterPos, 0)).x();
 }
 
-PropertyTree2::CFormWidget::SFormRow* CFormWidget::ModelToFormRow(const CRowModel* pRowModel)
+PropertyTree::CFormWidget::SFormRow* CFormWidget::ModelToFormRow(const CRowModel* pRowModel)
 {
 	CRY_ASSERT(pRowModel && pRowModel->GetParent() == m_pRowModel && !pRowModel->IsHidden());
 
@@ -1348,7 +1371,7 @@ PropertyTree2::CFormWidget::SFormRow* CFormWidget::ModelToFormRow(const CRowMode
 	}
 }
 
-PropertyTree2::CFormWidget::SFormRow* CFormWidget::RowAtPosition(const QPoint& position)
+PropertyTree::CFormWidget::SFormRow* CFormWidget::RowAtPosition(const QPoint& position)
 {
 	int index = RowIndexAtPosition(position);
 	if (index != -1)
@@ -1499,7 +1522,11 @@ void CFormWidget::OnActiveRowChanged(const CRowModel* pNewActiveRow)
 
 void CFormWidget::UpdateActiveRow(const QPoint& cursorPos)
 {
-	if (cursorPos == m_lastCursorPos)
+	// There's a chance that while destroying the Property Tree and all it's CFormWidgets
+	// that an event might come in from Qt to update the active row. This is due to the way
+	// we delay destruction of children CFormWidgets to the next frame, to prevent huge stalls.
+	// Make sure the Property Tree is still valid
+	if (!m_pParentTree || cursorPos == m_lastCursorPos)
 	{
 		return;
 	}

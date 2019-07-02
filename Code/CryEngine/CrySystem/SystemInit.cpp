@@ -657,7 +657,21 @@ static void OnSysSpecChange(ICVar* pVar)
 #if CRY_PLATFORM_ORBIS
 	spec = CONFIG_ORBIS;
 #elif CRY_PLATFORM_DURANGO
-	spec = CONFIG_DURANGO;
+	switch (GetConsoleType())
+	{
+	case CONSOLE_TYPE::CONSOLE_TYPE_XBOX_ONE: // Fallthrough
+	case CONSOLE_TYPE::CONSOLE_TYPE_XBOX_ONE_S:
+		spec = CONFIG_DURANGO;
+		break;
+	case CONSOLE_TYPE::CONSOLE_TYPE_XBOX_ONE_X: // Fallthrough
+	case CONSOLE_TYPE::CONSOLE_TYPE_XBOX_ONE_X_DEVKIT:
+		spec = CONFIG_DURANGO_X;
+		break;
+	default:
+		CRY_ASSERT_MESSAGE(false, "Unknown Xbox type");
+		spec = CONFIG_DURANGO;
+		break;
+	}
 #elif CRY_PLATFORM_MOBILE
 	spec = CONFIG_CUSTOM;
 	GetISystem()->LoadConfiguration("mobile.cfg", 0, eLoadConfigSystemSpec);
@@ -752,7 +766,7 @@ WIN_HMODULE CSystem::LoadDynamicLibrary(const char* szModulePath, bool bQuitIfNo
 
 	if (bLogLoadingInfo)
 	{
-		CryLog(msg);
+		CryLog("%s", msg.c_str());
 	}
 
 	WIN_HMODULE handle = nullptr;
@@ -1490,12 +1504,14 @@ char* PhysHelpersToStr(int iHelpers, char* strHelpers)
 	if (iHelpers & 8) *ptr++ = 'l';
 	if (iHelpers & 16) *ptr++ = 'j';
 	if (iHelpers >> 16)
+	{
 		if (!(iHelpers & 1 << 27))
 			ptr += sprintf(ptr, "t(%d)", iHelpers >> 16);
 		else
 			for (int i = 0; i < 16; i++)
 				if (i != 11 && iHelpers & 1 << (16 + i))
 					ptr += sprintf(ptr, "f(%d)", i);
+	}
 	*ptr++ = 0;
 	return strHelpers;
 }
@@ -2863,13 +2879,13 @@ bool CSystem::Initialize(SSystemInitParams& startupParams)
 		//////////////////////////////////////////////////////////////////////////
 		InlineInitializationProcessing("CSystem::Init NotificationNetwork");
 
-		m_pNotificationNetwork = NULL;
+		m_pNotificationNetwork = nullptr;
 #ifndef _RELEASE
 	#if !(CRY_PLATFORM_LINUX || CRY_PLATFORM_ANDROID)
 
 		if (!startupParams.bMinimal && !gEnv->IsDedicated())
 		{
-			if (m_pNotificationNetwork = CNotificationNetwork::Create())
+			if ((m_pNotificationNetwork = CNotificationNetwork::Create()) != nullptr)
 			{
 				m_pNotificationNetwork->ListenerBind("HotUpdate", &CHotUpdateNotification::Instance());
 			}
@@ -4845,6 +4861,12 @@ void CSystem::CreateSystemVars()
 #else
 	enum {e_sysKeyboardDefault = 1};
 #endif
+
+	REGISTER_INT("sys_NoMouse", 0, VF_DUMPTODISK | VF_REQUIRE_APP_RESTART,
+		"Disable the mouse (in-game, not applicable to menus) and do not confine the mouse to the window (in fullscreen)"
+		"Usage: sys_MouseConfined [0/1] 0=mouse is enabled in-game and confined  1=mouse is disabled in-game and not confined\n"
+		"Default is 0 [off]");
+
 	m_sysKeyboard = REGISTER_INT("sys_keyboard", e_sysKeyboardDefault, 0,
 	                             "Enables keyboard.\n"
 	                             "Usage: sys_keyboard [0/1]\n"
@@ -4916,7 +4938,7 @@ void CSystem::CreateSystemVars()
 	REGISTER_CVAR2("MemInfo", &profile_meminfo, 0, 0, "Display memory information by modules\n1=on, 0=off");
 
 	m_sys_spec = REGISTER_INT_CB("sys_spec", CONFIG_CUSTOM, VF_ALWAYSONCHANGE,    // starts with CONFIG_CUSTOM so callback is called when setting initial value
-	                             "Tells the system cfg spec. (0=custom, 1=low, 2=med, 3=high, 4=very high, 5=XBoxOne, 6=PS4)",
+	                             "Tells the system cfg spec. (0=custom, 1=low, 2=med, 3=high, 4=very high, 5=Xbox One, 6=PS4)",
 	                             OnSysSpecChange);
 
 	m_sys_SimulateTask = REGISTER_INT("sys_SimulateTask", 0, 0,

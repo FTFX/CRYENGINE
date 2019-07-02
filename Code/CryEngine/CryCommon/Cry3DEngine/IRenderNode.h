@@ -256,6 +256,14 @@ struct IShadowCaster
 	int8              unused;
 };
 
+typedef uint64 FrustumMaskType;
+#define FMBIT(x) (FrustumMaskType(1) << (x))
+
+constexpr uint32 kPassCullMainBitId = 0;
+constexpr FrustumMaskType kPassCullMainMask = FMBIT(kPassCullMainBitId);
+
+constexpr uint32 kMaxShadowPassesNum = sizeof(FrustumMaskType) * CHAR_BIT - 1; // reserve first bit for main view
+
 class  COctreeNode;
 struct IOctreeNode
 {
@@ -354,6 +362,9 @@ public:
 	//! Changes the world coordinates position of this node by delta.
 	//! Don't forget to call this base function when overriding it.
 	virtual void OffsetPosition(const Vec3& delta) = 0;
+
+	//! Is node geometry visible in passInfo's camera
+	virtual bool IsVisible(const AABB& nodeBox, const float nodeDistance, const SRenderingPassInfo& passInfo) const { return true; }
 
 	//! Renders node geometry
 	virtual void Render(const struct SRendParams& EntDrawParams, const SRenderingPassInfo& passInfo) = 0;

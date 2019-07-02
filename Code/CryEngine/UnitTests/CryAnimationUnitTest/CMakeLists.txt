@@ -5,11 +5,13 @@ add_sources("NoUberFile"
 	SOURCE_GROUP "Source Files"
 		"GraphDijkstraTests.cpp"
 		"MergeParametricExamplesTests.cpp"
+		"AnimListPatternMatchingTests.cpp"
 )
 end_sources()
 
 CryUnitTestSuite(CryAnimationUnitTest SOLUTION_FOLDER "UnitTests")
 use_scaleform()
+include_directories("${CRYENGINE_DIR}/Code/CryEngine/CryCommon")
 include_directories("${CRYENGINE_DIR}/Code/CryEngine/CryAnimation")
 target_compile_definitions(${THIS_PROJECT} PRIVATE _LIB CRY_IS_MONOLITHIC_BUILD _LAUNCHER)
 if (NOT OPTION_STATIC_LINKING)
@@ -20,20 +22,10 @@ endif()
 
 if (ORBIS OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 	target_compile_options(${THIS_PROJECT} PRIVATE
-		-Wno-unused-variable
-		-Wno-reorder
-		-Wno-unknown-pragmas
-		-Wno-parentheses
-		-Wno-switch
-		-Wno-format
-		-Wno-dynamic-class-memaccess
-		-Wno-unused-private-field
-		-Wno-unused-value
-		-Wno-invalid-offsetof
-		-Wno-multichar
-		-Wno-empty-body
-		-Wno-unused-lambda-capture
-		-Wno-unused-function
+		-Wno-unknown-pragmas #See usages of raw #pragma warning
+		-Wno-unused-private-field #See CScopedWireFrameMode
+		-Wno-multichar #CryNetwork uses multichar constants such as 'bool'
+		-Wno-unused-function #See ByteOrder, CryGetModuleFileName, WrappedF_Break
 	)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 	target_compile_options(${THIS_PROJECT} PRIVATE

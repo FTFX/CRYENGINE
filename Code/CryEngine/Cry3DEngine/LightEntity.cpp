@@ -58,7 +58,6 @@ CLightEntity::~CLightEntity()
 	SAFE_RELEASE(m_light.m_Shader.m_pShader);
 	//m_light.m_Shader = NULL; // hack to avoid double deallocation
 
-	Get3DEngine()->UregisterLightFromAccessabilityCache(this);
 	Get3DEngine()->FreeRenderNodeState(this);
 	((C3DEngine*)Get3DEngine())->FreeLightSourceComponents(&m_light, false);
 
@@ -134,17 +133,9 @@ void CLightEntity::SetMatrix(const Matrix34& mat)
 
 		m_light.SetPosition(mat.GetTranslation());
 		m_light.SetMatrix(mat);
+
 		SetLightProperties(m_light);
 		Get3DEngine()->RegisterEntity(this);
-
-		//update shadow frustums
-		if (m_pShadowMapInfo != nullptr)
-		{
-			// TODO: Invalidate() might be overkill when new light orientation is "close" to old orientation, in which case an
-			// RequestUpdate() might suffice.
-			for (int i = 0; i < MAX_GSM_LODS_NUM && m_pShadowMapInfo->pGSM[i]; i++)
-				m_pShadowMapInfo->pGSM[i]->Invalidate();
-		}
 	}
 }
 
@@ -276,7 +267,6 @@ void CLightEntity::UpdateGSMLightSourceShadowFrustum(const SRenderingPassInfo& p
 	{
 		if (ShadowMapFrustum* pFr = m_pShadowMapInfo->pGSM[nLod])
 		{
-			pFr->ResetCasterLists();
 			pFr->m_eFrustumType = ShadowMapFrustum::e_GsmDynamic;
 			pFr->pShadowCacheData.reset();
 		}
@@ -492,17 +482,16 @@ bool CLightEntity::ProcessFrustum(int nLod, float fGSMBoxSize, float fDistanceFr
 {
 	ShadowMapFrustum* pFr = m_pShadowMapInfo->pGSM[nLod];
 
-	assert(pFr);
+	CRY_ASSERT(pFr);
 
 	CollectShadowCascadeForOnePassTraversal(pFr);
 
-	bool bDoGSM = fGSMBoxSize != 0;
-
+	const bool bDoGSM = fGSMBoxSize != 0;
 	if (bDoGSM)// && (m_light.m_Flags & DLF_SUN || m_light.m_Flags & DLF_PROJECT))
 	{
-		InitShadowFrustum_SUN_Conserv(pFr, SMC_EXTEND_FRUSTUM | SMC_SHADOW_FRUSTUM_TEST, fGSMBoxSize, fDistanceFromView, nLod, passInfo);
-
 		const uint32 renderNodeFlags = pFr->m_eFrustumType == ShadowMapFrustum::e_GsmDynamicDistance ? ERF_DYNAMIC_DISTANCESHADOWS : 0xFFFFFFFF;
+
+		InitShadowFrustum_SUN_Conserv(pFr, SMC_EXTEND_FRUSTUM | SMC_SHADOW_FRUSTUM_TEST, fGSMBoxSize, fDistanceFromView, nLod, passInfo);
 		SetupShadowFrustumCamera_SUN(pFr, SMC_EXTEND_FRUSTUM | SMC_SHADOW_FRUSTUM_TEST, renderNodeFlags, lstCastersHull, nLod, passInfo);
 	}
 	else if (m_light.m_Flags & DLF_PROJECT)
@@ -512,15 +501,11 @@ bool CLightEntity::ProcessFrustum(int nLod, float fGSMBoxSize, float fDistanceFr
 	}
 	else
 	{
-		pFr->bOmniDirectionalShadow = true;
 		InitShadowFrustum_OMNI(pFr, SMC_EXTEND_FRUSTUM | SMC_SHADOW_FRUSTUM_TEST, passInfo);
 		SetupShadowFrustumCamera_OMNI(pFr, SMC_EXTEND_FRUSTUM | SMC_SHADOW_FRUSTUM_TEST, passInfo);
 	}
 
 	CalculateShadowBias(pFr, nLod, fGSMBoxSize);
-
-	if (GetCVars()->e_ShadowsFrustums && pFr && pFr->GetCasterNum())
-		pFr->DrawFrustum(GetRenderer(), (GetCVars()->e_ShadowsFrustums == 1) ? 1000 : 1);
 
 	return bDoGSM;
 }
@@ -567,9 +552,7 @@ void CLightEntity::InitShadowFrustum_SUN_Conserv(ShadowMapFrustum* pFr, int dwAl
 	Vec3 vViewDir = passInfo.GetCamera().GetViewdir();
 	//float fDistance = sqrt_tpl( fGSMBoxSize*fGSMBoxSize - vEdgeScreen.z*vEdgeScreen.z - vEdgeScreen.x*vEdgeScreen.x ) + vEdgeScreen.y;
 
-	pFr->Invalidate();
-
-	pFr->nOmniFrustumMask.set(0);
+	pFr->RequestUpdates(1);
 	pFr->nShadowMapLod = nLod;
 	pFr->vLightSrcRelPos = m_light.m_Origin - passInfo.GetCamera().GetPosition();
 	pFr->fRadius = m_light.m_fRadius;
@@ -646,7 +629,6 @@ void CLightEntity::InitShadowFrustum_SUN_Conserv(ShadowMapFrustum* pFr, int dwAl
 	// local jitter amount depends on frustum size
 	pFr->fFrustrumSize = 1.0f / (fGSMBoxSize * (float)Get3DEngine()->m_fGsmRange);
 	pFr->nUpdateFrameId = frameID;
-	pFr->bIncrementalUpdate = false;
 
 	//Get gsm bounds
 	GetGsmFrustumBounds(passInfo.GetCamera(), pFr);
@@ -1256,20 +1238,21 @@ void GetCubemapFrustum(ShadowMapFrustum* pFr, int nS, CCamera& shadowFrust)
 
 void CLightEntity::CheckValidFrustums_OMNI(ShadowMapFrustum* pFr, const SRenderingPassInfo& passInfo)
 {
-	pFr->nOmniFrustumMask.reset();
-
 	const CCamera& cameraFrust = passInfo.GetCamera();
 
+	uint32 requestUpdates = 0;
 	for (int nS = 0; nS < OMNI_SIDES_NUM; nS++)
 	{
-
 		CCamera shadowFrust;
 		GetCubemapFrustum(pFr, nS, shadowFrust);
 
 		if (FrustumIntersection(cameraFrust, shadowFrust))
-			pFr->nOmniFrustumMask.set(nS);
-
+		{
+			requestUpdates |= BIT(nS);
+		}
 	}
+
+	pFr->RequestUpdates(requestUpdates);
 }
 
 bool CLightEntity::CheckFrustumsIntersect(CLightEntity* lightEnt)
@@ -1345,14 +1328,12 @@ void CLightEntity::InitShadowFrustum_PROJECTOR(ShadowMapFrustum* pFr, int dwAllo
 
 	Vec3 vProjDir = entMat.GetColumn(0).GetNormalizedSafe();
 
+	pFr->RequestUpdates(1);
 	pFr->nShadowMapLod = -1;    // not used
 
 	// place center into middle of projector far plane
 	pFr->vLightSrcRelPos = -vProjDir * m_light.m_fRadius;
 	pFr->vProjTranslation = m_light.m_Origin - pFr->vLightSrcRelPos;
-	if (pFr->fRadius != m_light.m_fRadius)
-		pFr->Invalidate();
-
 	pFr->bIncrementalUpdate = false;
 	pFr->fRadius = m_light.m_fRadius;
 	assert(m_light.m_pOwner && m_light.m_pOwner == this);
@@ -1365,7 +1346,6 @@ void CLightEntity::InitShadowFrustum_PROJECTOR(ShadowMapFrustum* pFr, int dwAllo
 
 	pFr->fNearDist = 0.01f;
 	pFr->fFarDist = m_light.m_fRadius;
-	pFr->nOmniFrustumMask.set(0);
 	pFr->bUseShadowsPool = (m_light.m_Flags & DLF_DEFERRED_LIGHT) != 0;
 
 	// set texture size
@@ -1383,13 +1363,12 @@ void CLightEntity::InitShadowFrustum_PROJECTOR(ShadowMapFrustum* pFr, int dwAllo
 		nTexSize /= 2;
 
 	float shadowUpdateDist = max(0.0f, fLightToCameraDist - m_light.m_fShadowUpdateMinRadius);
-
 	float shadowUpdateRate = 255.0f;
 
 	if (GetCVars()->e_ShadowsUpdateViewDistRatio)
 		shadowUpdateRate = min(255.f, fShadowUpdateScale * shadowUpdateDist * passInfo.GetZoomFactor() / (fShadowUpdate));
 
-	pFr->nShadowPoolUpdateRate = (uint8) shadowUpdateRate;
+	pFr->nShadowPoolUpdateRate = (uint8)shadowUpdateRate;
 
 	if (m_light.m_Flags & DLF_DEFERRED_LIGHT)
 	{
@@ -1462,7 +1441,6 @@ void CLightEntity::InitShadowFrustum_PROJECTOR(ShadowMapFrustum* pFr, int dwAllo
 	if (pFr->nTexSize != nTexSize)
 	{
 		pFr->nTexSize = nTexSize;
-		pFr->Invalidate();
 	}
 
 	//	m_pShadowMapInfo->bUpdateRequested = false;
@@ -1498,6 +1476,8 @@ void CLightEntity::InitShadowFrustum_PROJECTOR(ShadowMapFrustum* pFr, int dwAllo
 
 void CLightEntity::InitShadowFrustum_OMNI(ShadowMapFrustum* pFr, int dwAllowedTypes, const SRenderingPassInfo& passInfo)
 {
+	pFr->bOmniDirectionalShadow = true;
+
 	InitShadowFrustum_PROJECTOR(pFr, dwAllowedTypes, passInfo);
 	CheckValidFrustums_OMNI(pFr, passInfo);
 
@@ -1688,20 +1668,12 @@ void CLightEntity::SetupShadowFrustumCamera_SUN(ShadowMapFrustum* pFr, int dwAll
 		assert(m_light.m_Flags & DLF_SUN);
 		MakeShadowCastersHull(lstCastersHull, passInfo);
 	}
-
-	//  fill casters list
-	if (pFr->isUpdateRequested())
-	{
-		pFr->ResetCasterLists();
-	}
 }
 
 void CLightEntity::SetupShadowFrustumCamera_PROJECTOR(ShadowMapFrustum* pFr, int dwAllowedTypes, const SRenderingPassInfo& passInfo)
 {
 	FUNCTION_PROFILER_3DENGINE;
 
-	//  fill casters list
-	pFr->ResetCasterLists();
 	pFr->bOmniDirectionalShadow = false;
 
 	if (dwAllowedTypes)
@@ -1715,9 +1687,6 @@ void CLightEntity::SetupShadowFrustumCamera_PROJECTOR(ShadowMapFrustum* pFr, int
 		FrustCam.SetMatrix(mat);
 		FrustCam.SetFrustum(pFr->nTexSize, pFr->nTexSize, pFr->fFOV * (gf_PI / 180.0f), pFr->fNearDist, pFr->fFarDist);
 
-		pFr->ResetCasterLists();
-		pFr->RequestUpdate();
-
 		pFr->aabbCasters.Reset(); // fix: should i .Reset() pFr->aabbCasters ?
 	}
 }
@@ -1726,8 +1695,7 @@ void CLightEntity::SetupShadowFrustumCamera_OMNI(ShadowMapFrustum* pFr, int dwAl
 {
 	FUNCTION_PROFILER_3DENGINE;
 
-	//  fill casters list
-	pFr->ResetCasterLists();
+	pFr->bOmniDirectionalShadow = true;
 
 	if (dwAllowedTypes)
 	{
@@ -1739,9 +1707,6 @@ void CLightEntity::SetupShadowFrustumCamera_OMNI(ShadowMapFrustum* pFr, int dwAl
 
 		FrustCam.SetMatrix(mat);
 		FrustCam.SetFrustum(256, 256, pFr->fFOV * (gf_PI / 180.0f) * 0.9f, pFr->fNearDist, pFr->fFarDist);
-
-		pFr->ResetCasterLists();
-		pFr->RequestUpdate();
 
 		pFr->aabbCasters.Reset(); // fix: should i .Reset() pFr->aabbCasters ?
 
@@ -1801,11 +1766,134 @@ void CLightEntity::UpdateCastShadowFlag(float fDistance, const SRenderingPassInf
 #endif
 }
 
+bool CLightEntity::IsVisible(const SRenderLight& rLight, const CCamera& rCamera, bool bTestCoverageBuffer) const
+{
+	bool bIsVisible = true;
+
+	if (!(rLight.m_Flags & DLF_ATTACH_TO_SUN))
+	{
+		if (rLight.m_Flags & DLF_DEFERRED_CUBEMAPS)
+		{
+			OBB obb(OBB::CreateOBBfromAABB(Matrix33(rLight.m_ObjMatrix), AABB(-rLight.m_ProbeExtents, rLight.m_ProbeExtents)));
+			bIsVisible = rCamera.IsOBBVisible_F(rLight.m_Origin, obb);
+		}
+		else if (rLight.m_Flags & DLF_AREA)
+		{
+			// OBB test for area lights.
+			Vec3 vBoxMax(rLight.m_fRadius, rLight.m_fRadius + rLight.m_fAreaWidth, rLight.m_fRadius + rLight.m_fAreaHeight);
+			Vec3 vBoxMin(-0.1f, -(rLight.m_fRadius + rLight.m_fAreaWidth), -(rLight.m_fRadius + rLight.m_fAreaHeight));
+
+			OBB obb(OBB::CreateOBBfromAABB(Matrix33(rLight.m_ObjMatrix), AABB(vBoxMin, vBoxMax)));
+			bIsVisible = rCamera.IsOBBVisible_F(rLight.m_BaseOrigin, obb);
+		}
+		else
+		{
+			Sphere sp(rLight.m_BaseOrigin, rLight.m_fRadius);
+			bIsVisible = rCamera.IsSphereVisible_F(sp);
+		}
+	}
+	else
+	{
+		bIsVisible = GetCVars()->e_Sun != 0;
+	}
+
+	if (!bIsVisible)
+		return false;
+
+	if ((rLight.m_Flags & DLF_PROJECT) && (rLight.m_fLightFrustumAngle < 90.f) && (rLight.m_pLightImage || rLight.m_pLightDynTexSource))
+	{
+#if defined(FEATURE_SVO_GI)
+		if (!GetCVars()->e_svoTI_Apply || GetGIMode() != eGM_DynamicVoxelization)
+#endif
+		{
+			CCamera lightCam = rCamera;
+			lightCam.SetPositionNoUpdate(rLight.m_Origin);
+			Matrix34 entMat = ((ILightSource*)(rLight.m_pOwner))->GetMatrix();
+			entMat.OrthonormalizeFast();
+			Matrix33 matRot = Matrix33::CreateRotationVDir(entMat.GetColumn(0));
+			lightCam.SetMatrixNoUpdate(Matrix34(matRot, rLight.m_Origin));
+			lightCam.SetFrustum(1, 1, (rLight.m_fLightFrustumAngle * 2) / 180.0f * gf_PI, 0.1f, rLight.m_fRadius);
+
+			bIsVisible = FrustumIntersection(rCamera, lightCam);
+		}
+	}
+
+	return bIsVisible;
+}
+
+bool CLightEntity::IsVisible(const AABB& nodeBox, const float nodeDistance, const SRenderingPassInfo& passInfo) const
+{
+	const CCamera& rCamera = passInfo.GetCamera();
+	const SRenderLight& rLight = m_light;
+
+	// Frustum and occlusion culling -----------------------------------------------------------------------------
+	if (!IsVisible(rLight, rCamera, passInfo.IsGeneralPass()))
+		return false;
+
+	// VisArea culling -------------------------------------------------------------------------------------------
+	CVisArea* pVisArea = (CVisArea*)GetEntityVisArea();
+
+	int nMaxRecursion = (rLight.m_Flags & DLF_THIS_AREA_ONLY) ? 2 : 3;
+	if (!m_pObjManager || !m_pVisAreaManager || !m_pVisAreaManager->IsEntityVisAreaVisible(this, nMaxRecursion, &rLight, passInfo))
+	{
+		if (rLight.m_Flags & DLF_SUN && m_pVisAreaManager && m_pVisAreaManager->m_bSunIsNeeded)
+			; // sun may be used in indoor even if outdoor is not visible
+		else if (!pVisArea && GetEntityTerrainNode() && !(rLight.m_Flags & DLF_THIS_AREA_ONLY) && m_pVisAreaManager && m_pVisAreaManager->m_bSunIsNeeded)
+			; // not "this area only" outdoor light affects everything
+		else if ((rLight.m_Flags & (DLF_IGNORES_VISAREAS | DLF_THIS_AREA_ONLY)) == DLF_IGNORES_VISAREAS)
+			;
+		else
+			return false;
+	}
+
+	if (pVisArea)
+	{
+		const int nEngineFrameID = passInfo.GetFrameID();
+
+		// vis area lsource
+		IVisArea* pCameraVisArea = Get3DEngine()->GetVisAreaFromPos(rCamera.GetPosition());
+
+		// check if light is visible through light area portal cameras
+		if (pVisArea->m_nRndFrameId == nEngineFrameID && pVisArea != (CVisArea*)pCameraVisArea)
+		{
+			int nCam = 0;
+			for (; nCam < pVisArea->m_lstCurCamerasLen; nCam++)
+				if (IsVisible(rLight, CVisArea::s_tmpCameras[pVisArea->m_lstCurCamerasIdx + nCam], false))
+					break;
+
+			if (nCam == pVisArea->m_lstCurCamerasLen)
+				return false; // invisible
+		}
+
+		// check if lsource is in visible area
+		if (!IsLightAreasVisible() && pCameraVisArea != pVisArea)
+		{
+			if (rLight.m_Flags & DLF_THIS_AREA_ONLY)
+			{
+				if (pVisArea)
+				{
+					int nRndFrameId = pVisArea->GetVisFrameId();
+					if (nEngineFrameID - nRndFrameId > MAX_FRAME_ID_STEP_PER_FRAME)
+						return false; // area invisible
+				}
+				else
+					return false; // area invisible
+			}
+		}
+	}
+	else
+	{
+		// outdoor lsource
+		if (!(rLight.m_Flags & DLF_DIRECTIONAL) && !IsLightAreasVisible())
+			return false; // outdoor invisible
+	}
+
+	return true;
+}
+
 void CLightEntity::Render(const SRendParams& rParams, const SRenderingPassInfo& passInfo)
 {
 	FUNCTION_PROFILER_3DENGINE;
-
-	DBG_LOCK_TO_THREAD(this);
 
 	CRY_ASSERT(!(m_light.m_Flags & DLF_DISABLED));
 
@@ -1815,6 +1903,9 @@ void CLightEntity::Render(const SRendParams& rParams, const SRenderingPassInfo& 
 	if (GetCVars()->e_svoTI_Apply && (IRenderNode::GetGIMode() == eGM_HideIfGiIsActive))
 		return;
 #endif
+
+	if (m_layerId != uint16(~0))
+		return;
 
 	if (!(m_light.m_Flags & DLF_DEFERRED_LIGHT) || passInfo.IsRecursivePass())
 		return;
@@ -1839,98 +1930,6 @@ void CLightEntity::Render(const SRendParams& rParams, const SRenderingPassInfo& 
 	int nRenderNodeMinSpec = (m_dwRndFlags & ERF_SPEC_BITS_MASK) >> ERF_SPEC_BITS_SHIFT;
 	if (!CheckMinSpec(nRenderNodeMinSpec))
 		return;
-
-	Sphere sp(m_light.m_BaseOrigin, m_light.m_fRadius);
-
-	bool bIsVisible = false;
-	if (m_light.m_Flags & DLF_DEFERRED_CUBEMAPS)
-	{
-		OBB obb(OBB::CreateOBBfromAABB(Matrix33(m_light.m_ObjMatrix), AABB(-m_light.m_ProbeExtents, m_light.m_ProbeExtents)));
-		bIsVisible = passInfo.GetCamera().IsOBBVisible_F(m_light.m_Origin, obb);
-	}
-	else
-		bIsVisible = passInfo.GetCamera().IsSphereVisible_F(sp);
-
-	if (!bIsVisible && !(m_light.m_Flags & DLF_ATTACH_TO_SUN))
-		return;
-
-	//assert(m_light.IsOk());
-
-	if ((m_light.m_Flags & DLF_PROJECT) && (m_light.m_fLightFrustumAngle < 90.f) && (m_light.m_pLightImage || m_light.m_pLightDynTexSource))
-#if defined(FEATURE_SVO_GI)
-		if (!GetCVars()->e_svoTI_Apply || GetGIMode() != eGM_DynamicVoxelization)
-#endif
-	{
-		CCamera lightCam = passInfo.GetCamera();
-		lightCam.SetPositionNoUpdate(m_light.m_Origin);
-		Matrix34 entMat = ((ILightSource*)(m_light.m_pOwner))->GetMatrix();
-		entMat.OrthonormalizeFast();
-		Matrix33 matRot = Matrix33::CreateRotationVDir(entMat.GetColumn(0));
-		lightCam.SetMatrixNoUpdate(Matrix34(matRot, m_light.m_Origin));
-		lightCam.SetFrustum(1, 1, (m_light.m_fLightFrustumAngle * 2) / 180.0f * gf_PI, 0.1f, m_light.m_fRadius);
-		if (!FrustumIntersection(passInfo.GetCamera(), lightCam))
-			return;
-	}
-
-	const int nEngineFrameID = passInfo.GetFrameID();
-
-	int nMaxReqursion = (m_light.m_Flags & DLF_THIS_AREA_ONLY) ? 2 : 3;
-	if (!m_pObjManager || !m_pVisAreaManager || !m_pVisAreaManager->IsEntityVisAreaVisible(this, nMaxReqursion, &m_light, passInfo))
-	{
-		if (m_light.m_Flags & DLF_SUN && m_pVisAreaManager && m_pVisAreaManager->m_bSunIsNeeded)
-		{
-			// sun may be used in indoor even if outdoor is not visible
-		}
-		else if (!GetEntityVisArea() && GetEntityTerrainNode() && !(m_light.m_Flags & DLF_THIS_AREA_ONLY) && m_pVisAreaManager && m_pVisAreaManager->m_bSunIsNeeded)
-		{
-			// not "this area only" outdoor light affects everything
-		}
-		else if ((m_light.m_Flags & (DLF_IGNORES_VISAREAS | DLF_THIS_AREA_ONLY)) == DLF_IGNORES_VISAREAS)
-		{
-		}
-		else
-			return;
-	}
-
-	if (CVisArea* pArea = (CVisArea*)GetEntityVisArea())
-	{
-		// vis area lsource
-		IVisArea* pCameraVisArea = Get3DEngine()->GetVisAreaFromPos(passInfo.GetCamera().GetPosition());
-
-		// check if light is visible thru light area portal cameras
-		if (pArea->m_nRndFrameId == nEngineFrameID && pArea != (CVisArea*)pCameraVisArea)
-		{
-			int nCam = 0;
-			for (; nCam < pArea->m_lstCurCamerasLen; nCam++)
-				if (CVisArea::s_tmpCameras[pArea->m_lstCurCamerasIdx + nCam].IsSphereVisible_F(sp))
-					break;
-
-			if (nCam == pArea->m_lstCurCamerasLen)
-				return; // invisible
-		}
-
-		// check if lsource is in visible area
-		if (!IsLightAreasVisible() && pCameraVisArea != pArea)
-		{
-			if (m_light.m_Flags & DLF_THIS_AREA_ONLY)
-			{
-				if (pArea)
-				{
-					int nRndFrameId = pArea->GetVisFrameId();
-					if (nEngineFrameID - nRndFrameId > MAX_FRAME_ID_STEP_PER_FRAME)
-						return; // area invisible
-				}
-				else
-					return; // area invisible
-			}
-		}
-	}
-	else
-	{
-		// outdoor lsource
-		if (!(m_light.m_Flags & DLF_DIRECTIONAL) && !IsLightAreasVisible())
-			return; // outdoor invisible
-	}
 
 	m_light.m_nStencilRef[0] = CClipVolumeManager::AffectsEverythingStencilRef;
 	m_light.m_nStencilRef[1] = CClipVolumeManager::InactiveVolumeStencilRef;
@@ -1963,53 +1962,48 @@ void CLightEntity::Render(const SRendParams& rParams, const SRenderingPassInfo& 
 
 	GetRenderer()->EF_UpdateDLight(&m_light);
 
-	bool bAdded = false;
-
 	// TODO: make it threadsafe and add it to e_ExecuteRenderAsJobMask
 	//3dengine side - lightID assigning
 	m_light.m_Id = int16(Get3DEngine()->GetDynamicLightSources()->Count() + passInfo.GetIRenderView()->GetLightsCount(eDLT_DeferredLight));
 
-	if (!bAdded)
+	if (passInfo.RenderShadows() && (m_light.m_Flags & DLF_CASTSHADOW_MAPS) && m_light.m_Id >= 0)
 	{
-		if (passInfo.RenderShadows() && (m_light.m_Flags & DLF_CASTSHADOW_MAPS) && m_light.m_Id >= 0)
-		{
-			UpdateGSMLightSourceShadowFrustum(passInfo);
+		UpdateGSMLightSourceShadowFrustum(passInfo);
 
-			if (m_pShadowMapInfo)
+		if (m_pShadowMapInfo)
+		{
+			m_light.m_pShadowMapFrustums = reinterpret_cast<ShadowMapFrustum**>(m_pShadowMapInfo->pGSM);
+		}
+	}
+
+	if (GetCVars()->e_DynamicLights && m_fWSMaxViewDist)
+	{
+		SRenderLight* pL = &m_light;
+		const bool isEnvProbe = (pL->m_Flags & DLF_DEFERRED_CUBEMAPS) != 0;
+		if (GetCVars()->e_DynamicLights == 2 && !isEnvProbe)
+		{
+			float fSize = 0.05f * (sinf(GetCurTimeSec() * 10.f) + 2.0f);
+			DrawSphere(pL->m_Origin, fSize, pL->m_Color);
 			{
-				m_light.m_pShadowMapFrustums = reinterpret_cast<ShadowMapFrustum**>(m_pShadowMapInfo->pGSM);
+				IRenderAuxText::DrawLabelF(pL->m_Origin, 1.3f, "id=%d, rad=%.1f, vdr=%d", pL->m_Id, pL->m_fRadius, (int)m_ucViewDistRatio);
+			}
+		}
+		else if (GetCVars()->e_DynamicLights == 3 && isEnvProbe)
+		{
+			float fSize = 0.05f * (sinf(GetCurTimeSec() * 10.f) + 2.0f);
+			DrawSphere(pL->m_Origin, fSize, pL->m_Color);
+			{
+				IRenderAuxText::DrawLabelF(pL->m_Origin, 1.3f, "id=%d, rad=%.1f, vdr=%d", pL->m_Id, pL->m_fRadius, (int)m_ucViewDistRatio);
 			}
 		}
 
-		if (GetCVars()->e_DynamicLights && m_fWSMaxViewDist)
+		const float mult = SATURATE(6.f * (1.f - (rParams.fDistance / m_fWSMaxViewDist)));
+		IF (m_light.m_Color.Luminance() * mult > 0, 1)
 		{
-			SRenderLight* pL = &m_light;
-			const bool isEnvProbe = (pL->m_Flags & DLF_DEFERRED_CUBEMAPS) != 0;
-			if (GetCVars()->e_DynamicLights == 2 && !isEnvProbe)
-			{
-				float fSize = 0.05f * (sinf(GetCurTimeSec() * 10.f) + 2.0f);
-				DrawSphere(pL->m_Origin, fSize, pL->m_Color);
-				{
-					IRenderAuxText::DrawLabelF(pL->m_Origin, 1.3f, "id=%d, rad=%.1f, vdr=%d", pL->m_Id, pL->m_fRadius, (int)m_ucViewDistRatio);
-				}
-			}
-			else if (GetCVars()->e_DynamicLights == 3 && isEnvProbe)
-			{
-				float fSize = 0.05f * (sinf(GetCurTimeSec() * 10.f) + 2.0f);
-				DrawSphere(pL->m_Origin, fSize, pL->m_Color);
-				{
-					IRenderAuxText::DrawLabelF(pL->m_Origin, 1.3f, "id=%d, rad=%.1f, vdr=%d", pL->m_Id, pL->m_fRadius, (int)m_ucViewDistRatio);
-				}
-			}
+			if (passInfo.IsGeneralPass())
+				Get3DEngine()->SetupLightScissors(&m_light, passInfo);
 
-			const float mult = SATURATE(6.f * (1.f - (rParams.fDistance / m_fWSMaxViewDist)));
-			IF (m_light.m_Color.Luminance() * mult > 0, 1)
-			{
-				if (passInfo.IsGeneralPass())
-					Get3DEngine()->SetupLightScissors(&m_light, passInfo);
-
-				Get3DEngine()->AddLightToRenderer(m_light, mult, passInfo);
-			}
+			Get3DEngine()->AddLightToRenderer(m_light, mult, passInfo);
 		}
 	}
 }
@@ -2079,14 +2073,13 @@ void CLightEntity::OffsetPosition(const Vec3& delta)
 	m_WSBBox.Move(delta);
 }
 
-void CLightEntity::ProcessPerObjectFrustum(ShadowMapFrustum* pFr, struct SPerObjectShadow* pPerObjectShadow, ILightSource* pLightSource, const SRenderingPassInfo& passInfo)
+void CLightEntity::InitShadowFrustum_OBJECT(ShadowMapFrustum* pFr, struct SPerObjectShadow* pPerObjectShadow, ILightSource* pLightSource, const SRenderingPassInfo& passInfo)
 {
-	assert(pFr);
+	CRY_ASSERT(pFr);
 	SRenderLight& light = pLightSource->GetLightProperties();
 
+	pFr->RequestUpdates(1);
 	pFr->m_eFrustumType = ShadowMapFrustum::e_PerObject;
-	pFr->RequestUpdate();
-	pFr->ResetCasterLists();
 
 	// mark the object to be rendered into shadow map
 	COctreeNode::SetTraversalFrameId((IRenderNode*)pPerObjectShadow->pCaster, passInfo.GetMainFrameID(), ~0);

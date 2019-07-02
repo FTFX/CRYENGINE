@@ -65,6 +65,10 @@ public:
 	virtual void                         SetOwnerEntity(IEntity* pEntity) override;
 	virtual IEntity*                     GetOwnerEntity() const            override { return m_pOwnerEntity; }
 	virtual bool                         IsAllocatedOutsideOf3DEngineDLL() override { return GetOwnerEntity() != nullptr; }
+
+	bool                                 IsVisible(const SRenderLight& rLight, const CCamera& rCamera, bool bTestCoverageBuffer) const;
+	virtual bool                         IsVisible(const AABB& nodeBox, const float nodeDistance, const SRenderingPassInfo& passInfo) const override;
+
 	void                                 InitEntityShadowMapInfoStructure(int dynamicLods, int cachedLods);
 	void                                 UpdateGSMLightSourceShadowFrustum(const SRenderingPassInfo& passInfo);
 	int                                  UpdateGSMLightSourceDynamicShadowFrustum(int nDynamicLodCount, int nDistanceLodCount, float& fDistanceFromViewLastDynamicLod, float& fGSMBoxSizeLastDynamicLod, bool bFadeLastCascade, const SRenderingPassInfo& passInfo);
@@ -74,7 +78,7 @@ public:
 	void                                 CollectShadowCascadeForOnePassTraversal(ShadowMapFrustum* pFr);
 	static bool                          IsOnePassTraversalFrustum(const ShadowMapFrustum* pFr);
 	static void                          SetShadowFrustumsCollector(std::vector<std::pair<ShadowMapFrustum*, const CLightEntity*>>* p) { s_pShadowFrustumsCollector = p; }
-	static void                          ProcessPerObjectFrustum(ShadowMapFrustum* pFr, struct SPerObjectShadow* pPerObjectShadow, ILightSource* pLightSource, const SRenderingPassInfo& passInfo);
+	static void                          InitShadowFrustum_OBJECT(ShadowMapFrustum* pFr, struct SPerObjectShadow* pPerObjectShadow, ILightSource* pLightSource, const SRenderingPassInfo& passInfo);
 	void                                 InitShadowFrustum_SUN_Conserv(ShadowMapFrustum* pFr, int dwAllowedTypes, float fGSMBoxSize, float fDistance, int nLod, const SRenderingPassInfo& passInfo);
 	void                                 InitShadowFrustum_PROJECTOR(ShadowMapFrustum* pFr, int dwAllowedTypes, const SRenderingPassInfo& passInfo);
 	void                                 InitShadowFrustum_OMNI(ShadowMapFrustum* pFr, int dwAllowedTypes, const SRenderingPassInfo& passInfo);

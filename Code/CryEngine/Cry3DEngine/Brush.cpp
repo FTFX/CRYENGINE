@@ -786,7 +786,7 @@ bool CBrush::GetLodDistances(const SFrameLodInfo& frameLodInfo, float* distances
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-void CBrush::Render(const CLodValue& lodValue, const SRenderingPassInfo& passInfo, SSectorTextureSet* pTerrainTexInfo, PodArray<SRenderLight*>* pAffectingLights)
+void CBrush::Render(const CLodValue& lodValue, const SRenderingPassInfo& passInfo, SSectorTextureSet* pTerrainTexInfo)
 {
 	FUNCTION_PROFILER_3DENGINE;
 
@@ -927,7 +927,7 @@ void CBrush::Render(const CLodValue& lodValue, const SRenderingPassInfo& passInf
 	if (!passInfo.IsShadowPass() && m_nInternalFlags & IRenderNode::REQUIRES_NEAREST_CUBEMAP)
 	{
 		if (!(pObj->m_nTextureID = GetObjManager()->CheckCachedNearestCubeProbe(this)) || !GetCVars()->e_CacheNearestCubePicking)
-			pObj->m_nTextureID = GetObjManager()->GetNearestCubeProbe(pAffectingLights, GetEntityVisArea(), CBrush::GetBBox());
+			pObj->m_nTextureID = GetObjManager()->GetNearestCubeProbe(GetEntityVisArea(), CBrush::GetBBox());
 
 		pTempData->userData.nCubeMapId = pObj->m_nTextureID;
 	}
@@ -947,7 +947,11 @@ void CBrush::Render(const CLodValue& lodValue, const SRenderingPassInfo& passInf
 		bool bUseTerrainColor = (GetCVars()->e_BrushUseTerrainColor == 2);
 		if (pMat && GetCVars()->e_BrushUseTerrainColor == 1)
 		{
-			if (pMat->GetSafeSubMtl(0)->GetFlags() & MTL_FLAG_BLEND_TERRAIN)
+			// NOTE: Hack-fix to match CB/SR data to the shader
+			// m_pSCGFlagLegacyFix.insert(MapNameFlagsItor::value_type("%BLENDTERRAIN", (uint64)0x4000000));
+			const uint64 nMaskGenFX = pMat->GetSafeSubMtl(0)->GetShaderItem().m_pShader->GetGenerationMask();
+			const auto nFlags = pMat->GetSafeSubMtl(0)->GetFlags();
+			if ((nMaskGenFX & 0x4000000) || (nFlags & MTL_FLAG_BLEND_TERRAIN))
 				bUseTerrainColor = true;
 		}
 

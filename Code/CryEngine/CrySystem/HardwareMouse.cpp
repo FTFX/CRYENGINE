@@ -61,12 +61,9 @@ int CHardwareMouse::s_MouseControllerEmulation = 1;
 //-----------------------------------------------------------------------------------------------------
 
 CHardwareMouse::CHardwareMouse(bool bVisibleByDefault)
-	: m_debugHardwareMouse(0)
-	, m_pExclusiveEventListener(nullptr)
-	, m_pCursorTexture(nullptr)
-	, m_bPrevShowState(true)
+	: m_bPrevShowState(true)
 #if !defined(_RELEASE)
-	, m_allowConfine(GetISystem()->GetICmdLine()->FindArg(eCLAT_Pre, "nomouse") == nullptr)
+	, m_allowConfine((gEnv->pConsole->GetCVar("sys_NoMouse")) && (gEnv->pConsole->GetCVar("sys_NoMouse")->GetIVal() == 0))
 #else
 	, m_allowConfine(true)
 #endif // !defined(_RELEASE)
@@ -439,6 +436,10 @@ void CHardwareMouse::OnSystemEvent(ESystemEvent event, UINT_PTR wparam, UINT_PTR
 	{
 		bool bFocus = (wparam != 0);
 		HandleFocusEvent(bFocus);
+	}
+	else if (event == ESYSTEM_EVENT_POS_CHANGED)
+	{
+		EvaluateCursorConfinement();
 	}
 	else if (event == ESYSTEM_EVENT_MOVE)
 	{
@@ -873,6 +874,7 @@ bool CHardwareMouse::IsFullscreen()
 	{
 		gEnv->pRenderer->EF_Query(EFQ_Fullscreen, bFullScreen);
 	}
+
 	return bFullScreen;
 }
 

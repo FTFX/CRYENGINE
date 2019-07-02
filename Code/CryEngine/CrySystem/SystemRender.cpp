@@ -88,6 +88,17 @@ void OnWindowStateChanged(ICVar* pCVar)
 	{
 		pFullscreenCVar->Set(pCVar->GetIVal() == 3 ? 1 : 0);
 	}
+	GetISystem()->GetIRenderer()->UpdateWindowMode();
+}
+
+void OnHeightChanged(ICVar* var)
+{
+	GetISystem()->GetIRenderer()->UpdateResolution();
+}
+
+void OnWidthChanged(ICVar* var)
+{
+	GetISystem()->GetIRenderer()->UpdateResolution();
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -121,12 +132,14 @@ void CSystem::CreateRendererVars(const SSystemInitParams& startupParams)
 #endif
 
 	// load renderer settings from engine.ini
-	m_rWidth = REGISTER_INT("r_Width", iWidthDefault, VF_DUMPTODISK,
+	m_rWidth = REGISTER_INT_CB("r_Width", iWidthDefault, VF_DUMPTODISK,
 		"Sets the display width, in pixels.\n"
-		"Usage: r_Width [800/1024/..]");
-	m_rHeight = REGISTER_INT("r_Height", iHeightDefault, VF_DUMPTODISK,
+		"Usage: r_Width [800/1024/..]",
+		OnWidthChanged);
+	m_rHeight = REGISTER_INT_CB("r_Height", iHeightDefault, VF_DUMPTODISK,
 		"Sets the display height, in pixels.\n"
-		"Usage: r_Height [600/768/..]");
+		"Usage: r_Height [600/768/..]",
+		OnHeightChanged);
 	m_rColorBits = REGISTER_INT("r_ColorBits", 32, VF_DUMPTODISK | VF_REQUIRE_APP_RESTART,
 		"Sets the color resolution, in bits per pixel. Default is 32.\n"
 		"Usage: r_ColorBits [32/24/16/8]");
@@ -1012,7 +1025,7 @@ void CSystem::RenderMemoryInfo()
 	cry_sprintf(szText, "Lua Allocated Memory: %d KB", luaMemUsage / 1024);
 	DrawLabel(col, row++, HeaderColor, szText);
 
-	if (m_logMemoryInfo) pLog->Log(szText);
+	if (m_logMemoryInfo) pLog->Log("%s", szText);
 	//////////////////////////////////////////////////////////////////////////
 	//////////////////////////////////////////////////////////////////////////
 
@@ -1140,9 +1153,9 @@ void CSystem::RenderMemoryInfo()
 #else
 		if (m_logMemoryInfo)
 		{
-			pLog->Log("    %20s | Alloc: %6d Kb  |  Num: %7d  |  TotalAlloc: %" PRIu64 "KB",
+			pLog->Log("    %20s | Alloc: %6" PRIu64 " Kb  |  Num: %7d  |  TotalAlloc: %" PRIu64 "KB",
 				szModule,
-				usedInModule / 1024, memInfo.num_allocations, memInfo.allocated / 1024u);
+				usedInModule / 1024u, memInfo.num_allocations, memInfo.allocated / 1024u);
 		}
 #endif
 		row++;
@@ -1184,8 +1197,8 @@ void CSystem::RenderMemoryInfo()
 
 	if (m_logMemoryInfo)
 	{
-		pLog->Log("Sum of %d Modules %6d Kb  (Static: %6d Kb)  (Num: %8d) (TotalAlloc: %8I64d KB)", countedMemoryModules, totalUsedInModules / 1024,
-			totalUsedInModulesStatic / 1024, totalNumAllocsInModules, totalAllocatedInModules / 1024);
+		pLog->Log("Sum of %d Modules %6" PRIu64 " Kb  (Static: %6d Kb)  (Num: %8d) (TotalAlloc: %8" PRIu64 " KB)",
+			countedMemoryModules, totalUsedInModules / 1024u, totalUsedInModulesStatic / 1024, totalNumAllocsInModules, totalAllocatedInModules / 1024u);
 	}
 
 	int memUsageInMB_SysCopyMeshes = 0;

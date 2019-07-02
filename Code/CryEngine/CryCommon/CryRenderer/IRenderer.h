@@ -118,6 +118,7 @@ typedef float         vec2_t[2];
 #include <CryMath/Cry_Color.h>
 #include "Tarray.h"
 
+#define OMNI_SIDES_NUM 6
 #define MAX_NUM_VIEWPORTS 7
 
 //! Query types for CryInd editor (used in EF_Query() function).
@@ -977,6 +978,10 @@ struct IRenderer//: public IRendererCallbackServer
 	virtual CRY_HWND Init(int x, int y, int width, int height, unsigned int cbpp, int zbpp, int sbits, CRY_HWND Glhwnd = 0, bool bReInit = false, bool bShaderCacheGen = false) = 0;
 	virtual void     PostInit() = 0;
 
+	virtual void UpdateVsync() = 0;
+	virtual void UpdateWindowMode() = 0;
+	virtual void UpdateResolution() = 0;
+
 	//! Start active rendering of the intro movies while initializing the rest of the engine.
 	virtual void StartRenderIntroMovies() = 0;
 	virtual void StopRenderIntroMovies(bool bWaitForFinished) = 0;
@@ -1294,9 +1299,10 @@ struct IRenderer//: public IRendererCallbackServer
 	//! Draw all shaded REs in the list
 	virtual void         EF_EndEf3D(const int nPrecacheUpdateId, const int nNearPrecacheUpdateId, const SRenderingPassInfo& passInfo, const int nRenderFlags) = 0;
 
-	virtual void         EF_InvokeShadowMapRenderJobs(const SRenderingPassInfo& passInfo, const int nFlags) = 0;
+	virtual void         EF_PrepareShadowTasksForRenderView(const SRenderingPassInfo& passInfo) = 0;
+
 	virtual IRenderView* GetNextAvailableShadowsView(IRenderView* pMainRenderView, ShadowMapFrustum* pOwnerFrustum) = 0;
-	virtual void         PrepareShadowFrustumForShadowPool(IRenderView* pMainRenderView, ShadowMapFrustum* pFrustum, uint32 frameID, const SRenderLight& light, uint32* timeSlicedShadowsUpdated) = 0;
+	virtual uint32       PrepareShadowFrustumForShadowPool(IRenderView* pMainRenderView, ShadowMapFrustum* pFrustum, const SRenderLight& light, uint32 frameID, uint32 *timeSlicedShadowsUpdated) = 0;
 	virtual void         PrepareShadowPool(CRenderView* pRenderView) const = 0;
 
 	// Dynamic lights.

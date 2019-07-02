@@ -1,4 +1,4 @@
-// Copyright 2001-2018 Crytek GmbH / Crytek Group. All rights reserved.
+// Copyright 2001-2019 Crytek GmbH / Crytek Group. All rights reserved.
 #pragma once
 #include <CryCore/Platform/platform.h>
 #include <gtest/gtest.h>
@@ -412,17 +412,24 @@ namespace CryGTestDetails
 			, m_line(line)
 		{}
 
+		// Doesn't actually compare anything, instead it takes precedence over the actual comparison
+		// in the tested expression: CExpressionDecomposer <= a == b associates the left hand side.
+		// Operator '<=' is used here instead of '<<' due to GCC/Clang operator precedence warnings.
 		template<typename T, EnableIfUnfavorCopy<T> = 0>
-		constexpr CLeftHandSideExpression<const T&> operator<<(const T& val) const
+		constexpr CLeftHandSideExpression<const T&> operator<=(const T& val) const
 		{
 			return{ m_msg, m_file, m_line, val };
 		}
 
-		// Pass by value for certain types of arguments such as integral types
+		// Doesn't actually compare anything, instead it takes precedence over the actual comparison
+		// in the tested expression: CExpressionDecomposer <= a == b associates the left hand side.
+		// Operator '<=' is used here instead of '<<' due to GCC/Clang operator precedence warnings.
+		//
+		// Overload to pass by value for certain types of arguments such as integral types
 		// This solves the problem sometimes the address of the value cannot be taken,
 		// e.g. inline static const member
 		template<typename T, EnableIfFavorCopy<T> = 0>
-		constexpr CLeftHandSideExpression<T> operator<<(T val) const
+		constexpr CLeftHandSideExpression<T> operator<=(T val) const
 		{
 			return{ m_msg, m_file, m_line, val };
 		}
@@ -438,7 +445,7 @@ namespace CryGTestDetails
 //Redirection is necessary to reject comma separated arguments. Only single expressions are accepted.
 //DO NOT change to wrap the expression in additional parenthesis like (expr), the reporting mechanism relies on
 //operator precedences and would break if expr is wrapped.
-#define REQUIRE_IMPL(expr) (CryGTestDetails::CExpressionDecomposer(STRINGIFY(expr), __FILE__, __LINE__) << expr).Evaluate()
+#define REQUIRE_IMPL(expr) (CryGTestDetails::CExpressionDecomposer(STRINGIFY(expr), __FILE__, __LINE__) <= expr).Evaluate()
 
 //! Macro for testing a condition expression similar to EXPECT_TRUE(cond), but with improved error report.
 //! When evaluating a comparison, it holds both sides of the comparison with an expression template.
@@ -457,32 +464,12 @@ namespace CryGTestDetails
 // to improve error message qualities
 namespace testing
 {
-	namespace internal
-	{
-		//std::ceil is not constexpr, therefore we supplement ours
-		template<typename T>
-		constexpr int ceil(T f)
-		{
-			return (static_cast<T>(static_cast<int>(f)) == f) ?
-				static_cast<int>(f) :
-				static_cast<int>(f) + ((f > 0) ? 1 : 0);
-		}
-
-		// "9.20000076(0x1.2666680p+3)" for single-precision float
-		template<typename T>
-		inline void CryUnitTestPrintFloatingPoint(T value, ::std::ostream* os)
-		{
-			std::streamsize defaultPrecision = os->precision();
-			constexpr int max_digits16 = ceil(std::numeric_limits<T>::digits / T(4)/*log2(16)*/ + 1);
-			*os << std::setprecision(std::numeric_limits<T>::max_digits10) << value
-				<< '(' << std::hexfloat << std::setprecision(max_digits16) << value << ')'
-				<< std::setprecision(defaultPrecision);
-		}
-
-		inline void PrintTo(float value, ::std::ostream* os)       { CryUnitTestPrintFloatingPoint(value, os); }
-		inline void PrintTo(double value, ::std::ostream* os)      { CryUnitTestPrintFloatingPoint(value, os); }
-		inline void PrintTo(long double value, ::std::ostream* os) { CryUnitTestPrintFloatingPoint(value, os); }
-	}
+	// These need to be function template specializations rather than overloads, 
+	// because overloading primitive types doesn't work unless visible while template instantiation.
+	// Specialization works regardless of the inclusion order.
+	template<> ::std::string PrintToString(const float& value);
+	template<> ::std::string PrintToString(const double& value);
+	template<> ::std::string PrintToString(const long double& value);
 }
 
 // GTest printing support for CRYENGINE types

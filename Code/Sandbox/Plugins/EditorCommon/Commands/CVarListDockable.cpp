@@ -5,13 +5,15 @@
 
 #include "Qt/QtMainFrame.h"
 
-#include <QAdvancedItemDelegate.h>
 #include <Commands/QCommandAction.h>
+#include <Controls/LongLongSpinBox.h>
 #include <EditorFramework/PersonalizationManager.h>
 #include <FileDialogs/SystemFileDialog.h>
 #include <ProxyModels/DeepFilterProxyModel.h>
+#include <QAdvancedItemDelegate.h>
 #include <QAdvancedTreeView.h>
 #include <QSearchBox.h>
+
 #include <CryIcon.h>
 
 #include <QAbstractButton>
@@ -105,6 +107,9 @@ public:
 
 			case CCVarModel::String:
 				return new QLineEdit(pParent);
+
+			case CCVarModel::Int64:
+				return new CLongLongSpinBox(pParent);
 
 			default:
 				break;
@@ -263,8 +268,7 @@ QVariant CCVarModel::data(const QModelIndex& index, int role /*= Qt::DisplayRole
 				return pCVar->GetString();
 
 			case ECVarType::Int64:
-				CRY_ASSERT_MESSAGE(false, "CCVarModel::data int64 cvar not implemented");
-				return pCVar->GetIVal();
+				return pCVar->GetI64Val();
 
 			default:
 				return QVariant();
@@ -301,8 +305,7 @@ QVariant CCVarModel::data(const QModelIndex& index, int role /*= Qt::DisplayRole
 					return "String";
 
 				case ECVarType::Int64:
-					CRY_ASSERT_MESSAGE(false, "CCVarModel::data int64 cvar not implemented");
-					return "Integer";
+					return "64-bit value";
 
 				default:
 					return "UNKNOWN";
@@ -335,8 +338,7 @@ QVariant CCVarModel::data(const QModelIndex& index, int role /*= Qt::DisplayRole
 			return DataTypes::String;
 
 		case ECVarType::Int64:
-			CRY_ASSERT_MESSAGE(false, "CCVarModel::data int64 cvar not implemented");
-		// fall through
+			return DataTypes::Int64;
 
 		default:
 			return -1;
@@ -403,29 +405,32 @@ bool CCVarModel::setData(const QModelIndex& index, const QVariant& value, int ro
 				switch (pCVar->GetType())
 				{
 				case ECVarType::Int:
-				{
-					const auto valueInt = value.toInt();
-					pCVar->Set(valueInt);
-					return true;
-				}
+					{
+						const auto valueInt = value.toInt();
+						pCVar->Set(valueInt);
+						return true;
+					}
 
 				case ECVarType::Float:
-				{
-					const auto valueFloat = value.toFloat();
-					pCVar->Set(valueFloat);
-					return true;
-				}
+					{
+						const auto valueFloat = value.toFloat();
+						pCVar->Set(valueFloat);
+						return true;
+					}
 
 				case ECVarType::String:
-				{
-					const auto valueString = value.toString().toStdString();
-					pCVar->Set(valueString.c_str());
-					return true;
-				}
+					{
+						const auto valueString = value.toString().toStdString();
+						pCVar->Set(valueString.c_str());
+						return true;
+					}
 
 				case ECVarType::Int64:
-					CRY_ASSERT_MESSAGE(false, "CCVarModel::setData int64 cvar not implemented");
-				// fall through
+					{
+						const auto valueInt64 = value.toLongLong();
+						pCVar->Set(valueInt64);
+						return true;
+					}
 
 				default:
 					return false;
@@ -481,12 +486,24 @@ CCVarBrowser::CCVarBrowser(QWidget* pParent /* = nullptr*/)
 	m_pFilterProxy->setSortRole(static_cast<int>(CCVarModel::Roles::SortRole));
 	m_pFilterProxy->setFilterKeyColumn(eCVarListColumn_Name);
 
+	QWidget* pSearchBoxContainer = new QWidget();
+	pSearchBoxContainer->setObjectName("SearchBoxContainer");
+
+	QHBoxLayout* pSearchBoxLayout = new QHBoxLayout();
+	pSearchBoxLayout->setAlignment(Qt::AlignTop);
+	pSearchBoxLayout->setMargin(0);
+	pSearchBoxLayout->setSpacing(0);
+
 	const auto pSearchBox = new QSearchBox(this);
 	pSearchBox->SetModel(m_pFilterProxy.get());
 	pSearchBox->EnableContinuousSearch(true);
 
 	const auto pFavoriteToggle = new QToolButton(this);
 	pFavoriteToggle->setIcon(FavoritesHelper::GetFavoriteIcon(bFavoritesOnly));
+
+	pSearchBoxLayout->addWidget(pFavoriteToggle);
+	pSearchBoxLayout->addWidget(pSearchBox);
+	pSearchBoxContainer->setLayout(pSearchBoxLayout);
 
 	const auto treeBehavior = static_cast<QAdvancedTreeView::Behavior>(QAdvancedTreeView::PreserveExpandedAfterReset | QAdvancedTreeView::PreserveSelectionAfterReset);
 	m_pTreeView = new QAdvancedTreeView(treeBehavior, this);
@@ -512,8 +529,7 @@ CCVarBrowser::CCVarBrowser(QWidget* pParent /* = nullptr*/)
 
 	const auto pHLayout = new QHBoxLayout();
 	pHLayout->setContentsMargins(0, 0, 0, 0);
-	pHLayout->addWidget(pSearchBox);
-	pHLayout->addWidget(pFavoriteToggle);
+	pHLayout->addWidget(pSearchBoxContainer);
 
 	const auto pLayout = new QVBoxLayout();
 	pLayout->setContentsMargins(0, 0, 0, 0);
@@ -530,7 +546,7 @@ CCVarBrowser::CCVarBrowser(QWidget* pParent /* = nullptr*/)
 		ICVar* pCVar = m_pModel->GetCVar(mappedIndex);
 		if (pCVar)
 		{
-			signalOnClick(pCVar->GetName());
+		  signalOnClick(pCVar->GetName());
 		}
 	});
 
@@ -543,7 +559,7 @@ CCVarBrowser::CCVarBrowser(QWidget* pParent /* = nullptr*/)
 		ICVar* pCVar = m_pModel->GetCVar(mappedIndex);
 		if (pCVar)
 		{
-			signalOnDoubleClick(pCVar->GetName());
+		  signalOnDoubleClick(pCVar->GetName());
 		}
 	});
 
